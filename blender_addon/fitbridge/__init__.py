@@ -33,11 +33,18 @@ def _attachment_items(self, context):
 
 def _scale_changed(self, context):
     if rig.shown() == "R15":                                 # the R15 follows the body scale
-        if spec.cached_rig(self.body_scale) is None:
-            with server.lock:
-                server.state["need_rigs"].add(self.body_scale)
+        _ask_for_rig(self.body_scale)
         rig.spawn_r15(context, self.body_scale)
     mark_dirty()
+
+
+def _ask_for_rig(key):
+    """put rig:<key> in /v1/hello's needs when we have no up-to-date synced rig for it; True if asked"""
+    if spec.rig_outdated(key):
+        with server.lock:
+            server.state["need_rigs"].add(key)
+        return True
+    return False
 
 
 def _type_changed(self, context):
@@ -117,9 +124,7 @@ class FB_OT_spawn_r15(bpy.types.Operator):
 
     def execute(self, context):
         scale = context.scene.fitbridge.body_scale
-        if spec.cached_rig(scale) is None:
-            with server.lock:
-                server.state["need_rigs"].add(scale)
+        if _ask_for_rig(scale) and spec.cached_rig(scale) is None:
             self.report({"WARNING"}, "Open Studio with the FitBridge plugin to fetch the rig. Showing a box rig.")
         rig.spawn_r15(context, scale)
         mark_dirty()
@@ -147,6 +152,7 @@ class FB_OT_show_rig(bpy.types.Operator):
         elif self.kind == "R15":
             return bpy.ops.fitbridge.spawn_r15()
         else:
+            _ask_for_rig("R6")
             rig.spawn_r6(context)
         mark_dirty()
         return {"FINISHED"}
@@ -248,11 +254,13 @@ class FB_PT_main(bpy.types.Panel):
         cur = rig.shown()
         row.operator("fitbridge.show_rig", text="R15", icon="OUTLINER_OB_ARMATURE", depress=cur == "R15").kind = "R15"
         row.operator("fitbridge.show_rig", text="R6 preview", icon="MESH_CUBE", depress=cur == "R6").kind = "R6"
-        if spec.cached_rig(st.body_scale) is None:
+        key = "R6" if cur == "R6" else st.body_scale
+        if spec.rig_outdated(key):
             col = box.column(align=True)
             col.scale_y = 0.8
             col.label(text="Open Studio with the FitBridge plugin", icon="INFO")
-            col.label(text="to fetch the rig (box rig until then).")
+            col.label(text="to fetch the real rig meshes." if spec.cached_rig(key) else
+                      "to fetch the rig (boxes until then).")
 
         box = lay.box()
         box.label(text="Accessory", icon="MOD_CLOTH")
@@ -321,9 +329,13 @@ def process_inbox():
             elif path == "/v1/rig":
                 scale = spec.save_rig(body)
                 evaluate._bvh_cache.clear()
-                sc, src = rig.spawned_r15()
-                if sc == scale and src == "standin":
-                    rig.spawn_r15(bpy.context, scale)          # swap the box rig for the real one
+                if scale == "R6":
+                    if rig.spawned_r6_source() in ("standin", "outdated"):
+                        rig.spawn_r6(bpy.context)              # swap the boxes for the real R6
+                else:
+                    sc, src = rig.spawned_r15()
+                    if sc == scale and src in ("standin", "outdated"):
+                        rig.spawn_r15(bpy.context, scale)      # swap the box / older rig for the new one
             elif path == "/v1/package/result":
                 _status["last_result"] = body
         except Exception as e:                                # a bad payload mustn't stop the loop

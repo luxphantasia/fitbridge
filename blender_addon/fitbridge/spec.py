@@ -224,11 +224,12 @@ def lowest_point(rig_data):
 
 
 _rigs = {}
+RIG_VERSION = 2            # v2: R15 with the Default Dynamic Head as a real mesh, and real R6 meshes ("R6" rigs)
 
 
 def cached_rig(scale):
-    """the synced rig, or None. Rigs cached before Studio stood them on the ground (feet at y = -3) are stale: they
-    count as missing, so spawning asks Studio for a new one."""
+    """the synced rig (scale = a body scale, or "R6"), or None. Rigs cached before Studio stood them on the ground
+    (feet at y = -3) count as missing. Older-format rigs are still shown, but rig_outdated() asks for a new one."""
     if scale not in _rigs:
         data = _read(f"rig_{scale}.json")
         if data is not None and lowest_point(data) < -0.05:
@@ -238,16 +239,30 @@ def cached_rig(scale):
     return _rigs[scale]
 
 
+def rig_outdated(scale):
+    """True when there's no synced rig, or it's from before RIG_VERSION: Studio should send it (again)"""
+    data = cached_rig(scale)
+    return data is None or int(data.get("rig_version") or 1) < RIG_VERSION
+
+
 def rig(scale):
     """the synced rig for a body scale, or the stand-in"""
     return cached_rig(scale) or standin_rig(scale)
 
 
+def rig_key(body):
+    """where a POSTed rig is filed: "R6" for the R6 preview, else its body scale"""
+    if body.get("rig_type") == "R6" or body.get("body_scale") == "R6":
+        return "R6"
+    return body.get("body_scale")
+
+
 def save_rig(body):
-    scale = body.get("body_scale")
-    if scale not in SCALES:
+    scale = rig_key(body)
+    if scale not in SCALES and scale != "R6":
         raise ValueError(f"Unknown body scale {scale!r}")
-    data = {"body_scale": scale, "parts": body.get("parts") or [], "attachments": body.get("attachments") or []}
+    data = {"body_scale": scale, "rig_version": int(body.get("rig_version") or 1),
+            "parts": body.get("parts") or [], "attachments": body.get("attachments") or []}
     _write(f"rig_{scale}.json", data)
     _rigs[scale] = data
     return scale

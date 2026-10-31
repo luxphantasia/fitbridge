@@ -85,14 +85,25 @@ def spawn_r15(context, scale):
     data = spec.rig(scale)
     coll = _collection(context, R15_COLL)
     coll["fitbridge_scale"] = scale
-    coll["fitbridge_source"] = "standin" if data.get("standin") else "studio"
-    for p in data["parts"]:
+    coll["fitbridge_source"] = _source(data, scale)
+    _build_parts(coll, data["parts"])
+    return coll
+
+
+def _source(data, key):
+    """"standin" (boxes), "outdated" (an older synced rig) or "studio"; the first two get replaced on sync"""
+    if data is None or data.get("standin"):
+        return "standin"
+    return "outdated" if spec.rig_outdated(key) else "studio"
+
+
+def _build_parts(coll, parts):
+    for p in parts:
         V, T = geom.part_mesh(p)
         V = _inset(V, _inset_for(p["name"]))
         C = geom.cframe_to_matrix(p["cframe"])
         Vw = (V @ C[:3, :3].T + C[:3, 3]) @ geom.P.T
         _part_object(coll, p["name"], Vw, T)
-    return coll
 
 
 def _inset(V, amount):
@@ -110,14 +121,25 @@ def spawned_r15():
 
 
 def spawn_r6(context):
-    """the blocky R6 preview, standing where the R15 stands (it replaces it)"""
+    """the R6 preview, standing where the R15 stands (it replaces it): Studio's real R6 meshes once synced, boxes
+    from the spec until then"""
     clear_all()
     coll = _collection(context, R6_COLL)
+    data = spec.cached_rig("R6")
+    coll["fitbridge_source"] = _source(data, "R6")
+    if data is not None:
+        _build_parts(coll, data["parts"])
+        return coll
     for name, p in spec.SPEC["r6_preview"]["parts"].items():
         V, T = geom.box_mesh(p["size"])
         Vw = (_inset(V, _inset_for(name)) + np.asarray(p["cframe"][:3], float)) @ geom.P.T
         _part_object(coll, name, Vw, T)
     return coll
+
+
+def spawned_r6_source():
+    coll = bpy.data.collections.get(R6_COLL)
+    return None if coll is None else coll.get("fitbridge_source")
 
 
 # ------------------------------------------------------------------------------------------------------- thumbnail
