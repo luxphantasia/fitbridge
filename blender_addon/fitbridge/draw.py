@@ -162,29 +162,37 @@ def draw_ghost():
 
 
 def draw_crop_guide():
-    """a faint inner square in the camera frame: Roblox may frame the thumbnail a little closer than this camera"""
+    """in the thumbnail camera: the circle Roblox's own thumbnail tool fits the Handle into by default (the Handle's
+    bounding sphere), as a reference for how Roblox sizes the item"""
     context = bpy.context
     if not _in_thumb_camera(context):
         return
+    import math
     from bpy_extras.view3d_utils import location_3d_to_region_2d
-    from .thumb import CROP
-    sc = context.scene
-    cam = sc.camera
-    if cam is None:
+    from mathutils import Vector
+    from .evaluate import LIVE
+    from .thumb import handle_circle
+    got = handle_circle(LIVE["result"])
+    cam = context.scene.camera
+    if got is None or cam is None:
         return
-    frame = [cam.matrix_world @ v for v in cam.data.view_frame(scene=sc)]
-    px = [location_3d_to_region_2d(context.region, context.region_data, v) for v in frame]
-    if any(p is None for p in px):
-        return
-    cx = sum(p.x for p in px) / 4
-    cy = sum(p.y for p in px) / 4
-    corners = [((p.x - cx) * CROP + cx, (p.y - cy) * CROP + cy) for p in px]
+    centre, radius = Vector(got[0]), got[1]
+    right = cam.matrix_world.col[0].xyz.normalized()
+    up = cam.matrix_world.col[1].xyz.normalized()
+    pts = []
+    for k in range(64):
+        t = 2 * math.pi * k / 64
+        p = location_3d_to_region_2d(context.region, context.region_data,
+                                     centre + (right * math.cos(t) + up * math.sin(t)) * radius)
+        if p is None:
+            return
+        pts.append((p.x, p.y, 0))
     ls = gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR")
     ls.uniform_float("viewportSize", (context.region.width, context.region.height))
     ls.uniform_float("lineWidth", 1.0)
-    ls.uniform_float("color", (1.0, 1.0, 1.0, 0.45))
+    ls.uniform_float("color", (1.0, 1.0, 1.0, 0.4))
     gpu.state.blend_set("ALPHA")
-    batch_for_shader(ls, "LINE_LOOP", {"pos": [(x, y, 0) for x, y in corners]}).draw(ls)
+    batch_for_shader(ls, "LINE_LOOP", {"pos": pts}).draw(ls)
     gpu.state.blend_set("NONE")
 
 

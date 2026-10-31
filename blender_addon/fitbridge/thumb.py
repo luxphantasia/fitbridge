@@ -16,7 +16,11 @@ from . import geom, spec
 
 FOV = spec.SPEC["thumbnail"]["field_of_view"]
 TAN = math.tan(math.radians(FOV) / 2)
-CROP = 0.85                         # Roblox may frame a bit closer: the inner guide is this share of the picture
+# Roblox's own UGC Thumbnail Tool (plugin 11628621048) starts from this shot: the view direction is its
+# CFrame.fromEulerAnglesXYZ(20, 30, 45) applied to the Handle's look vector (camera ~32 deg to the character's left,
+# ~17 deg above), centred on the Handle, at the distance where the Handle's bounding sphere fills the 70 deg view.
+ROBLOX_DIR = np.array([-0.5, 0.29620, -0.81380])
+ROBLOX_DIR = ROBLOX_DIR / np.linalg.norm(ROBLOX_DIR)
 COLL = "FitBridge Thumbnails"
 _quiet = {"n": 0}                   # > 0 while we set the sliders ourselves (their update must not mark "moved by you")
 _last = {}                          # camera name -> the matrix we last put it at (to notice your own moves)
@@ -346,9 +350,36 @@ def _hide_rigs(hide):
             coll.hide_render = hide
 
 
+def roblox_shot(res):
+    """Roblox's tool default as a camera frame in the Handle's frame, or None before a mesh is fitted"""
+    if res is None or res.get("fit") is None:
+        return None
+    radius = float(np.linalg.norm(res["fit"]["size"])) / 2
+    return geom.look_at(ROBLOX_DIR * (radius / TAN), [0, 0, 0])
+
+
+def handle_circle(res):
+    """the Handle's bounding sphere (Blender world centre, radius): what Roblox's tool fits in its default view"""
+    if res is None or res.get("fit") is None or res.get("A") is None:
+        return None
+    H = handle_frame(res)
+    return geom.P @ H[:3, 3], float(np.linalg.norm(res["fit"]["size"])) / 2
+
+
 def preset(context, name):
-    """jump to a named angle (keeps distance and pan); Side and 3/4 face the item's own side"""
+    """jump to a named angle (keeps distance and pan); Side and 3/4 face the item's own side. ROBLOX = the exact
+    shot Roblox's own thumbnail tool starts from"""
     g, _ob = owner(context)
+    if name == "ROBLOX":
+        from .evaluate import LIVE
+        L = roblox_shot(LIVE["result"])
+        if L is None:
+            return False
+        turn, tilt, dist, pan = params_from_local(L, g.pivot)
+        _set(g, turn, tilt, dist, pan)
+        g.manual = True
+        apply_params(context)
+        return True
     turn, tilt = PRESETS[name]
     side_turn = _SIDE.get(context.scene.fitbridge.attachment, _FRONT)[0]
     if name in ("SIDE", "THREE_Q") and side_turn < 0:
@@ -356,6 +387,7 @@ def preset(context, name):
     _set(g, turn, tilt, g.distance, (g.pan_x, g.pan_y))
     g.manual = True
     apply_params(context)
+    return True
 
 
 def reset(context):
