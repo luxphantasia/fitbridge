@@ -186,6 +186,8 @@ def part_mesh(p):
     if m and m.get("positions") and m.get("triangles"):
         return np.asarray(m["positions"], float).reshape(-1, 3), np.asarray(m["triangles"], np.int64).reshape(-1, 3)
     shape = p.get("shape") or {}
+    if not shape and p.get("name") == "Head":
+        shape = {"kind": "classic_head"}                       # an R15 Head with no mesh file is the classic head
     if shape.get("kind") == "classic_head":
         sc = shape.get("scale") or (1, 1, 1)
         return rounded_cylinder([s * k for s, k in zip(p["size"], sc)])

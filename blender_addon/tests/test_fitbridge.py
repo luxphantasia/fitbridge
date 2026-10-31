@@ -140,11 +140,34 @@ if abs(spec.lowest_point(spec.rig("Normal"))) > 1e-9:
 zs = [v.co.z for o in bpy.data.collections["FitBridge R15"].objects for v in o.data.vertices]
 if not 0 <= min(zs) < 0.01:
     fail(f"spawned R15 feet at {min(zs)}")
-bpy.ops.fitbridge.spawn_r6()
-r6x = [v.co.x for o in bpy.data.collections["FitBridge R6 preview"].objects for v in o.data.vertices]
-r15x = [v.co.x for o in bpy.data.collections["FitBridge R15"].objects for v in o.data.vertices]
-if max(r6x) >= min(r15x):                                # Roblox +X (character's right) = Blender -X
-    fail("the R6 preview should stand beside the R15, not inside it")
+# R15 / R6 is one toggle: the R6 replaces the R15 in the same place, clicking the shown one hides it
+r15box = [v.co.copy() for o in bpy.data.collections["FitBridge R15"].objects for v in o.data.vertices]
+bpy.ops.fitbridge.show_rig(kind="R6")
+from fitbridge import rig as rigmod  # noqa: E402
+if rigmod.shown() != "R6" or bpy.data.collections.get("FitBridge R15") is not None:
+    fail("R6 should replace the R15")
+r6 = [v.co for o in bpy.data.collections["FitBridge R6 preview"].objects for v in o.data.vertices]
+r6c = (max(v.x for v in r6) + min(v.x for v in r6)) / 2
+if abs(r6c) > 1e-6 or not 0 <= min(v.z for v in r6) < 0.02:
+    fail("the R6 should stand where the R15 stands (centred, feet on the ground)")
+bpy.ops.fitbridge.show_rig(kind="R6")
+if rigmod.shown() is not None:
+    fail("clicking the shown mannequin again hides it")
+bpy.ops.fitbridge.show_rig(kind="R15")
+if rigmod.shown() != "R15":
+    fail("R15 back")
+# neighbouring parts are inset by different amounts (display only), so their faces never share a plane
+ins = {n: rigmod._inset_for(n) for n in ("LeftUpperArm", "LeftLowerArm", "LeftHand", "UpperTorso", "LowerTorso",
+                                         "RightUpperLeg", "RightLowerLeg", "RightFoot", "Head")}
+for a, b in (("LeftUpperArm", "LeftLowerArm"), ("LeftLowerArm", "LeftHand"), ("UpperTorso", "LowerTorso"),
+             ("UpperTorso", "LeftUpperArm"), ("LowerTorso", "RightUpperLeg"), ("RightUpperLeg", "RightLowerLeg"),
+             ("RightLowerLeg", "RightFoot"), ("UpperTorso", "Head")):
+    if ins[a] == ins[b]:
+        fail(f"{a} and {b} share an inset")
+# a Head with no mesh and no shape (rigs synced before Studio sent shapes) still draws as the classic head
+V, _T = geom.part_mesh({"name": "Head", "size": [1, 1, 1], "mesh": None})
+if len(V) < 100:
+    fail("mesh-less Head should fall back to the classic head")
 if "Normal" not in server.state["need_rigs"]:
     fail("spawning an uncached scale should ask Studio for that rig")
 ctx.view_layer.update()
@@ -509,7 +532,7 @@ if "rig:Classic" not in get("/v1/hello")[1]["needs"]:
     fail("a stale rig should be asked for again")
 st.body_scale = "Normal"
 done.append("classic_head drawn as a rounded cylinder (size x scale); rigs below y = -0.05 are stale and re-requested; "
-            "R15 stands on the ground, R6 beside it")
+            "R15 stands on the ground; R15 / R6 toggle in one place; per-part insets; mesh-less Head = classic head")
 
 # --- off again
 st.thumb_view = False
