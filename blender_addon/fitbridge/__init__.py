@@ -6,9 +6,10 @@ import os
 import time
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, IntProperty, PointerProperty, StringProperty
+from bpy.props import (BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty,
+                       PointerProperty, StringProperty)
 
-from . import draw, evaluate, rig, server, spec, upload
+from . import draw, evaluate, rig, server, spec, thumb, upload
 
 ICONS = {"pass": "CHECKMARK", "warn": "ERROR", "fail": "CANCEL"}
 _dirty = {"flag": True, "last": 0.0}
@@ -54,9 +55,35 @@ def _type_changed(self, context):
 
 def _thumb_changed(self, context):
     if self.thumb_view:
-        rig.thumbnail_on(context, evaluate.LIVE["result"])
+        thumb.view_on(context)
     else:
-        rig.thumbnail_off(context)
+        thumb.view_off(context)
+
+
+def _shot_changed(self, context):
+    """a slider moved: that's you framing the shot"""
+    if thumb._quiet["n"]:
+        return
+    self.manual = True
+    thumb.apply_params(context)
+
+
+class FB_Thumb(bpy.types.PropertyGroup):
+    """one thumbnail shot: an orbit around a pivot in the worn Handle's frame"""
+    camera: PointerProperty(type=bpy.types.Object)
+    manual: BoolProperty(default=False, description="You've framed this shot yourself (Reset goes back to the default)")
+    key: StringProperty()
+    turn: FloatProperty(name="Turn", default=25.0, min=-180.0, max=180.0, step=100, precision=1, update=_shot_changed,
+                        description="Around the item: 0 = from the front, + = toward the character's right")
+    tilt: FloatProperty(name="Tilt", default=15.0, min=-89.0, max=89.0, step=100, precision=1, update=_shot_changed,
+                        description="From above (+) or below (-)")
+    distance: FloatProperty(name="Distance", default=2.0, min=0.2, max=100.0, step=10, precision=2, unit="LENGTH",
+                            update=_shot_changed, description="How far the camera is from what it looks at (studs)")
+    pan_x: FloatProperty(name="Pan X", default=0.0, step=5, precision=2, unit="LENGTH", update=_shot_changed,
+                         description="Shift the picture left / right")
+    pan_y: FloatProperty(name="Pan Y", default=0.0, step=5, precision=2, unit="LENGTH", update=_shot_changed,
+                         description="Shift the picture up / down")
+    pivot: FloatVectorProperty(size=3)
 
 
 def _poll_mesh(self, ob):
@@ -75,9 +102,9 @@ class FB_Settings(bpy.types.PropertyGroup):
     override: BoolProperty(name="Override checks (testing)", default=False,
                            description="Allow Send to Studio even when a blocking check fails")
     thumb_view: BoolProperty(name="Thumbnail view", default=False, update=_thumb_changed,
-                             description="Roblox's thumbnail camera: 70 deg vertical FOV, square 420 render, "
-                                         "mannequin hidden")
-    thumb_camera: PointerProperty(name="Thumbnail camera", type=bpy.types.Object)
+                             description="Look through Roblox's thumbnail camera (70 deg vertical FOV, square 420). "
+                                         "Orbit, pan and zoom as usual to move it")
+    thumb_default: PointerProperty(type=FB_Thumb)            # the shot before an accessory mesh is picked
     thumb_saved: StringProperty()
     revision: IntProperty(default=0)
 
@@ -171,16 +198,50 @@ class FB_OT_spawn_r6(bpy.types.Operator):
 
 class FB_OT_reset_camera(bpy.types.Operator):
     bl_idname = "fitbridge.reset_camera"
-    bl_label = "Reset camera"
-    bl_description = "Put the thumbnail camera back 6 studs in front of the accessory"
+    bl_label = "Reset shot"
+    bl_description = "Back to the default close-up for this type and attachment (it follows your choices again)"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        res = evaluate.evaluate(context)
-        if res.get("fit") is None:
-            self.report({"ERROR"}, "Fit a mesh first")
+        thumb.reset(context)
+        return {"FINISHED"}
+
+
+class FB_OT_thumb_preset(bpy.types.Operator):
+    bl_idname = "fitbridge.thumb_preset"
+    bl_label = "Angle"
+    bl_options = {"REGISTER", "UNDO"}
+
+    angle: EnumProperty(items=[("FRONT", "Front", "Straight from the front"),
+                               ("THREE_Q", "3/4", "Three-quarter view, on the item's side"),
+                               ("SIDE", "Side", "From the item's side"),
+                               ("BACK", "Back", "From behind"),
+                               ("TOP", "Top", "From above")])
+
+    @classmethod
+    def description(cls, context, props):
+        return {"FRONT": "Straight from the front", "THREE_Q": "Three-quarter view, on the item's side",
+                "SIDE": "From the item's side", "BACK": "From behind", "TOP": "From above"}[props.angle]
+
+    def execute(self, context):
+        thumb.preset(context, self.angle)
+        return {"FINISHED"}
+
+
+class FB_OT_thumb_preview(bpy.types.Operator):
+    bl_idname = "fitbridge.thumb_preview"
+    bl_label = "Preview"
+    bl_description = "Render the 420 x 420 thumbnail with simple flat lighting (only the accessory) and show it"
+
+    def execute(self, context):
+        img = thumb.preview(context)
+        if img is None:
+            self.report({"ERROR"}, "The preview render failed")
             return {"CANCELLED"}
-        rig.reset_camera(context, res)
+        try:
+            bpy.ops.render.view_show("INVOKE_DEFAULT")
+        except RuntimeError:
+            pass
         return {"FINISHED"}
 
 
@@ -288,8 +349,30 @@ class FB_PT_main(bpy.types.Panel):
         row = box.row(align=True)
         row.prop(st, "thumb_view", toggle=True, icon="VIEW_CAMERA")
         row.operator("fitbridge.reset_camera", text="", icon="FILE_REFRESH")
+        g, gob = thumb.owner(context)
         if st.thumb_view:
-            box.label(text="Roblox may zoom slightly closer", icon="INFO")
+            row = box.row(align=True)
+            for key, label in (("FRONT", "Front"), ("THREE_Q", "3/4"), ("SIDE", "Side"), ("BACK", "Back"),
+                               ("TOP", "Top")):
+                row.operator("fitbridge.thumb_preset", text=label).angle = key
+            col = box.column(align=True)
+            col.prop(g, "turn")
+            col.prop(g, "tilt")
+            col.prop(g, "distance")
+            row = box.row(align=True)
+            row.prop(g, "pan_x", text="Pan X")
+            row.prop(g, "pan_y", text="Pan Y")
+            box.operator("fitbridge.thumb_preview", icon="RENDER_STILL")
+            if res is not None and res.get("fit") is not None and thumb.out_of_frame(res, g):
+                box.label(text="Part of the accessory is out of frame", icon="ERROR")
+            col = box.column(align=True)
+            col.scale_y = 0.8
+            col.label(text="Orbit / pan / zoom the view to move the camera", icon="INFO")
+            col.label(text="Keep it inside the inner frame: Roblox may zoom closer")
+            if gob is None:
+                col.label(text="Pick your accessory mesh to give it its own shot")
+        elif g.manual:
+            box.label(text="Framed by you (reset to follow the type again)", icon="CAMERA_DATA")
 
         box = lay.box()
         row = box.row(align=True)
@@ -353,7 +436,8 @@ def _tick():
             _dirty["flag"] = False
             _dirty["last"] = now
             try:
-                evaluate.evaluate(bpy.context)
+                res = evaluate.evaluate(bpy.context)
+                thumb.sync(bpy.context, res)
             except Exception as e:
                 print(f"FitBridge: check failed: {e}")
             changed = True
@@ -389,7 +473,8 @@ def _on_load(*_args):
     evaluate.LIVE["result"] = None
 
 
-classes = (FB_Settings, FB_Prefs, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_send,
+classes = (FB_Thumb, FB_Settings, FB_Prefs, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_thumb_preset, FB_OT_thumb_preview,
+           FB_OT_send,
            FB_OT_restart_server, FB_PT_main)
 
 
@@ -397,6 +482,7 @@ def register():
     for c in classes:
         bpy.utils.register_class(c)
     bpy.types.Scene.fitbridge = PointerProperty(type=FB_Settings)
+    bpy.types.Object.fitbridge_thumb = PointerProperty(type=FB_Thumb)
     server.state["hello"]["blender_version"] = bpy.app.version_string
     p = prefs()
     server.start(int(os.environ.get("FITBRIDGE_PORT") or (p.port if p else 47231)))
@@ -417,5 +503,6 @@ def unregister():
             lst.remove(fn)
     server.stop()
     del bpy.types.Scene.fitbridge
+    del bpy.types.Object.fitbridge_thumb
     for c in reversed(classes):
         bpy.utils.unregister_class(c)

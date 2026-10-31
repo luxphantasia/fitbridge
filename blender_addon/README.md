@@ -14,7 +14,8 @@ frame the thumbnail, then press **Send to Studio**. The contract is `../docs/PRO
 | `spec.py` | Bundled spec, live rules from Studio (they win), and the rig cache with a box stand-in until Studio sends one |
 | `evaluate.py` | Live checks on the evaluated mesh, and the package build: manifest, mesh, RGBA textures, camera |
 | `server.py` | The `http.server` thread on 127.0.0.1:47231. It only serves snapshots and queues POSTs; no bpy |
-| `rig.py` | Spawns R15 / R6 preview, and the thumbnail camera (70° vertical FOV, 420 square) |
+| `rig.py` | Spawns the R15 / R6 preview mannequin (one toggle, same place), shaded smooth like Studio |
+| `thumb.py` | Thumbnail camera: one shot per accessory as an orbit (turn, tilt, distance, pan) around the attachment in the Handle's frame; side-aware defaults; viewport navigation moves it; presets, preview render |
 | `draw.py` | Ghost bounds box (GPU overlay, green or red) and the "Top (Y): 0.14 studs over" readout |
 | `upload.py` | Open Cloud upload (PROTOCOL v1.1): a tiny `.glb` writer from the wire arrays, then a multipart POST + operation poll on a worker thread, cached by mesh + texture hashes |
 

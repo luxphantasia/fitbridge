@@ -148,6 +148,13 @@ if abs(spec.lowest_point(spec.rig("Classic"))) > 1e-9:
 zs = [v.co.z for o in bpy.data.collections["FitBridge R15"].objects for v in o.data.vertices]
 if not 0 <= min(zs) < 0.01:
     fail(f"spawned R15 feet at {min(zs)}")
+# rig shading like Studio: smooth, with hard edges only on real corners
+heads = [o for o in bpy.data.collections["FitBridge R15"].objects if o.name.startswith("UpperTorso")]
+me = heads[0].data
+if not all(p.use_smooth for p in me.polygons) or len(me.vertices) != 8:
+    fail("rig parts are welded and shaded smooth")
+if sum(e.use_edge_sharp for e in me.edges) != 12:          # 12 box corners sharp; face diagonals smooth
+    fail(f"a box's 90 degree corners stay sharp: {sum(e.use_edge_sharp for e in me.edges)}")
 # R15 / R6 is one toggle: the R6 replaces the R15 in the same place, clicking the shown one hides it
 r15box = [v.co.copy() for o in bpy.data.collections["FitBridge R15"].objects for v in o.data.vertices]
 bpy.ops.fitbridge.show_rig(kind="R6")
@@ -297,21 +304,128 @@ if not res["inside"]:
     fail("back inside after leaving Edit Mode")
 done.append("Edit Mode edits update the bounds live")
 
-# --- thumbnail view
+# --- thumbnail view: side-aware close-up, follows the item, notices your moves, sliders, presets, one shot per item
+from fitbridge import thumb  # noqa: E402
+
+
+def shot():
+    r = evaluate.evaluate(ctx)
+    thumb.sync(ctx, r)
+    H = thumb.handle_frame(r)
+    return r, np.linalg.inv(H) @ geom.unscaled(geom.swap(np.array(g.camera.matrix_world)))
+
+
 st.thumb_view = True
-cam = st.thumb_camera
-if cam is None or ctx.scene.render.resolution_x != 420 or abs(math.degrees(cam.data.angle_y) - 70) > 1e-4:
-    fail("thumbnail camera / render size")
-if not bpy.data.collections["FitBridge R15"].hide_viewport:
-    fail("mannequin should hide in thumbnail view")
-Hb = geom.swap(evaluate.handle_frame(res))[:3, 3]
-cpos = np.array(cam.matrix_world.translation)
-if abs(np.linalg.norm(cpos - Hb) - 6) > 1e-4 or cpos[1] > Hb[1] - 5.9:
-    fail(f"camera 6 studs in front (Blender -Y) of the handle: {cpos} vs {Hb}")
-fwd = -np.array(cam.matrix_world.col[2][:3])
-if np.dot(fwd, (Hb - cpos) / 6) < 0.9999:
-    fail("camera should look at the handle")
-done.append("thumbnail view: 70 deg vertical, 420 square, rig hidden, camera 6 studs in front looking at the Handle")
+g = hat.fitbridge_thumb
+cam = g.camera
+if cam is None or not cam.users_scene or ctx.scene.camera != cam:
+    fail("Thumbnail view should make (and look through) the hat's own camera")
+if ctx.scene.render.resolution_x != 420 or abs(math.degrees(cam.data.angle_y) - 70) > 1e-4:
+    fail("70 deg vertical, 420 square")
+if not bpy.data.collections["FitBridge R15"].hide_render:
+    fail("the mannequin must not render in the thumbnail")
+res, L = shot()
+rel = L[:3, 3] - np.array(g.pivot)
+if not (rel[2] < 0 and rel[0] > 0 and rel[1] > 0) or g.manual:
+    fail(f"a hat is shot from the front, a little to the right and above: {rel}")
+fwd = -L[:3, 2]
+to_pivot = np.array(g.pivot) - L[:3, 3]
+if np.linalg.norm(np.cross(fwd, to_pivot)) > 1e-4 or not 0.5 < g.distance < 5:
+    fail(f"close-up looking at the attachment area: distance {g.distance}")
+st.acc_type = "Back"
+res, Lb = shot()
+if not (Lb[:3, 3] - np.array(g.pivot))[2] > 0:
+    fail("a back item is shot from behind")
+st.acc_type = "Hat"
+res, L = shot()
+hat.location.x += 0.4
+res, L2 = shot()
+W1 = geom.swap(thumb.handle_frame(res)) @ L2
+if not np.allclose(np.array(cam.matrix_world)[:3, 3], W1[:3, 3], atol=1e-5) or g.manual:
+    fail("until you frame it, the default shot keeps framing the attachment area")
+hat.location.x -= 0.4
+res, L = shot()
+# you move the camera (as viewport navigation does): the sliders pick it up and it stops re-aiming
+M = cam.matrix_world.copy()
+M.translation += M.col[2].xyz * 1.5                    # dolly back 1.5 studs
+cam.matrix_world = M
+res, L3 = shot()
+if not g.manual or abs(g.distance - (np.linalg.norm(rel) + 1.5)) > 1e-3:
+    fail(f"your camera move should become the shot: manual {g.manual}, distance {g.distance}")
+if not np.allclose(np.array(cam.matrix_world), np.array(M), atol=1e-4):
+    fail("the shot from your move should reproduce your camera exactly")
+st.acc_type = "Back"
+res, L4 = shot()
+if not np.allclose(L3, L4, atol=1e-5):
+    fail("once you've framed it yourself, changing the type must not re-aim")
+st.acc_type = "Hat"
+hat.location.x += 0.4
+res, L4b = shot()
+if not np.allclose(L3, L4b, atol=1e-5):
+    fail("a shot you framed follows the accessory (it's stored relative to the Handle)")
+hat.location.x -= 0.4
+res, _ = shot()
+st.acc_type = "Hat"
+g.turn = 90.0                                           # slider
+res, L5 = shot()
+if abs(math.degrees(math.atan2(L5[0, 2], -L5[2, 2])) - 90) > 1e-3:
+    fail("the Turn slider should move the camera")
+bpy.ops.fitbridge.thumb_preset(angle="BACK")
+if abs(abs(g.turn) - 180) > 1e-6:
+    fail("Back preset")
+bpy.ops.fitbridge.reset_camera()
+res, L6 = shot()
+if g.manual or not np.allclose(L6, L, atol=1e-5):
+    fail("Reset should bring back the default shot")
+# deleted camera: unlinked (still remembered) or gone entirely -> back on the next Thumbnail view
+for c in list(cam.users_collection):
+    c.objects.unlink(cam)
+st.thumb_view = False
+st.thumb_view = True
+if not g.camera.users_scene or ctx.scene.camera != g.camera:
+    fail("a camera deleted from the scene should come back")
+bpy.data.objects.remove(g.camera)
+st.thumb_view = False
+st.thumb_view = True
+if g.camera is None or not g.camera.users_scene or ctx.scene.camera != g.camera:
+    fail("a removed camera should be recreated")
+cam = g.camera
+res, L7 = shot()
+if not np.allclose(L7, L, atol=1e-5):
+    fail("a recreated camera keeps the shot")
+# the accessory too big for the default close-up gets a warning
+hat.scale = (4, 4, 4)
+res, _ = shot()
+if not thumb.out_of_frame(res, g):
+    fail("out of frame warning")
+hat.scale = (1, 1, 1)
+res, _ = shot()
+if thumb.out_of_frame(res, g):
+    fail("the default close-up should hold the hat")
+# one shot per accessory
+other = bpy.data.objects.new("Other", hat.data.copy())
+ctx.scene.collection.objects.link(other)
+other.location = (0, 0, 5.1)
+ctx.view_layer.objects.active = other
+res = evaluate.evaluate(ctx)
+thumb.sync(ctx, res)
+if other.fitbridge_thumb.camera is None or other.fitbridge_thumb.camera == hat.fitbridge_thumb.camera \
+        or ctx.scene.camera != other.fitbridge_thumb.camera:
+    fail("each accessory should have its own camera, and the view should switch to it")
+bpy.data.objects.remove(other.fitbridge_thumb.camera)
+bpy.data.objects.remove(other)
+ctx.view_layer.objects.active = hat
+res, L = shot()
+try:
+    img = thumb.preview(ctx)
+    preview_note = "preview renders" if img is not None else "preview: no image"
+except RuntimeError as e:
+    preview_note = f"preview not testable in background ({str(e)[:60]})"
+if ctx.scene.render.engine == "BLENDER_WORKBENCH" and preview_note == "preview renders":
+    pass
+done.append("thumbnail: own camera per accessory, hat from front-right-above, back item from behind, follows the item, "
+            "your camera moves become the shot (no re-aim after), sliders + presets, reset, deleted camera comes "
+            "back, out-of-frame warning; " + preview_note)
 
 # --- send
 code, _ = get("/v1/hello")
@@ -355,14 +469,12 @@ if not os.path.exists(tex["png_path"]):
 code, e = get("/v1/package/texture/roughness")
 if code != 404:
     fail("missing map should 404")
-# thumbnail camera relative to the worn handle = 6 studs in front (-Z) looking at it
+# the thumbnail camera, relative to the worn Handle: exactly the shot in the viewport
 Cr = geom.cframe_to_matrix(man["thumbnail"]["camera_cframe"])
-if not np.allclose(Cr[:3, 3], [0, 0, -6], atol=1e-4) or man["thumbnail"]["field_of_view"] != 70:
+if not np.allclose(Cr, L, atol=1e-4) or man["thumbnail"]["field_of_view"] != 70:
     fail(f"camera_cframe {man['thumbnail']}")
-if not np.allclose(Cr[:3, 2], [0, 0, -1], atol=1e-4):         # camera looks down -Z = toward +Z: its back is -Z
-    fail(f"camera orientation {Cr[:3, :3]}")
 done.append("Send: manifest matches the mock's fields, mesh centred + split per corner + CCW, "
-            "colour texture top row first + PNG, camera_cframe (0, 0, -6) relative to the Handle")
+            "colour texture top row first + PNG, camera_cframe = the viewport shot, relative to the Handle")
 
 # --- Open Cloud upload (fake server): glb, multipart, key only in the header, poll, cache, failure
 import struct  # noqa: E402

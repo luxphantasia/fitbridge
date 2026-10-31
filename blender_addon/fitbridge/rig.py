@@ -1,7 +1,6 @@
 # Scene helpers: the R15 mannequin (from the synced rig or the box stand-in), the R6 preview dummy, and the
 # thumbnail camera (70 deg vertical FOV, square 420 render, mannequin hidden).
 
-import json
 import math
 
 import bpy
@@ -22,7 +21,6 @@ _INSET_BY_PART = {"Head": 0.002, "UpperTorso": 0.006, "LowerTorso": 0.010,
 def _inset_for(name):
     key = name.replace("Left", "").replace("Right", "").strip()
     return _INSET_BY_PART.get(key, 0.004)
-CAM_NAME = "FitBridge Thumbnail"
 
 
 def _material():
@@ -45,15 +43,36 @@ def _clear(name):
     bpy.data.collections.remove(coll)
 
 
+def _smooth(me):
+    """shade like Roblox Studio: weld the seams Studio's meshes are split along, then smooth everything except edges
+    sharper than SMOOTH_ANGLE"""
+    import bmesh
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-5)
+    bm.to_mesh(me)
+    bm.free()
+    try:
+        me.shade_smooth()
+        me.set_sharp_from_angle(angle=SMOOTH_ANGLE)
+    except AttributeError:                                    # Blender before 4.1
+        for poly in me.polygons:
+            poly.use_smooth = True
+
+
 def _collection(context, name):
     coll = bpy.data.collections.new(name)
     context.scene.collection.children.link(coll)
     return coll
 
 
+SMOOTH_ANGLE = math.radians(60)    # Studio-like shading: soft across bevels, hard on real corners
+
+
 def _part_object(coll, name, V, T):
     me = bpy.data.meshes.new(name)
     me.from_pydata(np.asarray(V, float).tolist(), [], np.asarray(T, np.int64).reshape(-1, 3).tolist())
+    _smooth(me)
     me.validate()
     me.update()
     me.materials.append(_material())
@@ -143,73 +162,3 @@ def spawned_r6_source():
 
 
 # ------------------------------------------------------------------------------------------------------- thumbnail
-
-def _mat(m):
-    from mathutils import Matrix
-    return Matrix(np.asarray(m, float).tolist())
-
-
-def thumbnail_on(context, res):
-    sc = context.scene
-    st = sc.fitbridge
-    cam = st.thumb_camera
-    if cam is None:
-        data = bpy.data.cameras.new(CAM_NAME)
-        cam = bpy.data.objects.new(CAM_NAME, data)
-        sc.collection.objects.link(cam)
-        st.thumb_camera = cam
-        if res and res.get("fit") is not None:
-            cam.matrix_world = _mat(geom.swap(_default(res)))
-    cam.data.sensor_fit = "VERTICAL"
-    cam.data.angle_y = math.radians(spec.SPEC["thumbnail"]["field_of_view"])
-    cam.data.clip_start = 0.05
-    r = sc.render
-    st.thumb_saved = json.dumps({"x": r.resolution_x, "y": r.resolution_y, "pct": r.resolution_percentage,
-                                 "camera": sc.camera.name if sc.camera else ""})
-    n = spec.SPEC["thumbnail"]["render_size"]
-    r.resolution_x = r.resolution_y = n
-    r.resolution_percentage = 100
-    sc.camera = cam
-    _hide_rigs(True)
-    for area in context.screen.areas if context.screen else []:
-        if area.type == "VIEW_3D":
-            area.spaces.active.region_3d.view_perspective = "CAMERA"
-    return cam
-
-
-def _default(res):
-    from .evaluate import default_camera
-    return default_camera(res)
-
-
-def reset_camera(context, res):
-    cam = context.scene.fitbridge.thumb_camera
-    if cam is not None and res and res.get("fit") is not None:
-        cam.matrix_world = _mat(geom.swap(_default(res)))
-
-
-def thumbnail_off(context):
-    sc = context.scene
-    st = sc.fitbridge
-    try:
-        saved = json.loads(st.thumb_saved or "{}")
-    except ValueError:
-        saved = {}
-    r = sc.render
-    if saved:
-        r.resolution_x, r.resolution_y, r.resolution_percentage = saved["x"], saved["y"], saved["pct"]
-        if saved.get("camera") and saved["camera"] in bpy.data.objects:
-            sc.camera = bpy.data.objects[saved["camera"]]
-    st.thumb_saved = ""
-    _hide_rigs(False)
-    for area in context.screen.areas if context.screen else []:
-        if area.type == "VIEW_3D" and area.spaces.active.region_3d.view_perspective == "CAMERA":
-            area.spaces.active.region_3d.view_perspective = "PERSP"
-
-
-def _hide_rigs(hide):
-    for name in (R15_COLL, R6_COLL):
-        coll = bpy.data.collections.get(name)
-        if coll is not None:
-            coll.hide_viewport = hide
-            coll.hide_render = hide

@@ -108,9 +108,91 @@ def draw_text():
         blf.draw(font, line)
 
 
+# ------------------------------------------------------------------------------------------------- thumbnail view
+
+_ghost = {"key": None, "batch": None}
+
+
+def _ghost_batch(sh):
+    """the shown mannequin's triangles (its objects are hidden in Thumbnail view), cached until the rig changes"""
+    from .rig import R15_COLL, R6_COLL
+    coll = bpy.data.collections.get(R15_COLL) or bpy.data.collections.get(R6_COLL)
+    if coll is None:
+        return None
+    key = (coll.name, tuple((o.name, len(o.data.vertices)) for o in coll.objects if o.type == "MESH"))
+    if _ghost["key"] != key:
+        pts = []
+        for o in coll.objects:
+            if o.type != "MESH":
+                continue
+            me = o.data
+            me.calc_loop_triangles()
+            M = o.matrix_world
+            co = [M @ v.co for v in me.vertices]
+            for t in me.loop_triangles:
+                pts.extend(tuple(co[i]) for i in t.vertices)
+        _ghost["key"], _ghost["batch"] = key, batch_for_shader(sh, "TRIS", {"pos": pts}) if pts else None
+    return _ghost["batch"]
+
+
+def _in_thumb_camera(context):
+    st = getattr(context.scene, "fitbridge", None)
+    r3 = context.region_data
+    return st is not None and st.thumb_view and r3 is not None and r3.view_perspective == "CAMERA"
+
+
+def draw_ghost():
+    """the mannequin as a faint see-through ghost while framing (never rendered)"""
+    context = bpy.context
+    st = getattr(context.scene, "fitbridge", None)
+    if st is None or not st.thumb_view:
+        return
+    sh = gpu.shader.from_builtin("UNIFORM_COLOR")
+    batch = _ghost_batch(sh)
+    if batch is None:
+        return
+    gpu.state.blend_set("ALPHA")
+    gpu.state.depth_test_set("LESS_EQUAL")
+    gpu.state.depth_mask_set(False)
+    sh.uniform_float("color", (0.75, 0.78, 0.85, 0.12))
+    batch.draw(sh)
+    gpu.state.depth_mask_set(True)
+    gpu.state.depth_test_set("NONE")
+    gpu.state.blend_set("NONE")
+
+
+def draw_crop_guide():
+    """a faint inner square in the camera frame: Roblox may frame the thumbnail a little closer than this camera"""
+    context = bpy.context
+    if not _in_thumb_camera(context):
+        return
+    from bpy_extras.view3d_utils import location_3d_to_region_2d
+    from .thumb import CROP
+    sc = context.scene
+    cam = sc.camera
+    if cam is None:
+        return
+    frame = [cam.matrix_world @ v for v in cam.data.view_frame(scene=sc)]
+    px = [location_3d_to_region_2d(context.region, context.region_data, v) for v in frame]
+    if any(p is None for p in px):
+        return
+    cx = sum(p.x for p in px) / 4
+    cy = sum(p.y for p in px) / 4
+    corners = [((p.x - cx) * CROP + cx, (p.y - cy) * CROP + cy) for p in px]
+    ls = gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR")
+    ls.uniform_float("viewportSize", (context.region.width, context.region.height))
+    ls.uniform_float("lineWidth", 1.0)
+    ls.uniform_float("color", (1.0, 1.0, 1.0, 0.45))
+    gpu.state.blend_set("ALPHA")
+    batch_for_shader(ls, "LINE_LOOP", {"pos": [(x, y, 0) for x, y in corners]}).draw(ls)
+    gpu.state.blend_set("NONE")
+
+
 def register():
     _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_view, (), "WINDOW", "POST_VIEW"))
+    _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_ghost, (), "WINDOW", "POST_VIEW"))
     _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_text, (), "WINDOW", "POST_PIXEL"))
+    _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_crop_guide, (), "WINDOW", "POST_PIXEL"))
 
 
 def unregister():
