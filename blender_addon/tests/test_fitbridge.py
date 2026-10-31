@@ -119,7 +119,7 @@ if draw.ready(ctx):
 bpy.data.objects.remove(stray)
 done.append("no ghost box until a rig is spawned and a mesh is picked")
 
-# --- a hat: 1 x 1 x 0.4 box sitting on the stand-in head (HatAttachment at Roblox (0, 2, 0) = Blender (0, 0, 2))
+# --- a hat: 1 x 1 x 0.4 box sitting on the stand-in head (the stand-in stands on the ground: HatAttachment at Roblox (0, 5, 0) = Blender (0, 0, 5))
 bm = bmesh.new()
 bmesh.ops.create_cube(bm, size=1.0)
 bmesh.ops.scale(bm, vec=(1, 1, 0.4), verts=bm.verts)
@@ -130,11 +130,21 @@ bm.free()
 me.uv_layers.new(name="UV")
 hat = bpy.data.objects.new("Hat", me)
 ctx.scene.collection.objects.link(hat)
-hat.location = (0.3, -0.2, 2.1)                          # Roblox: x -0.3, z -0.2 (in front), bottom 0.1 above head
+hat.location = (0.3, -0.2, 5.1)                          # Roblox: x -0.3, z -0.2 (in front), bottom 0.1 above head
 ctx.view_layer.objects.active = hat
 st.acc_type = "Hat"
 st.body_scale = "Normal"
 bpy.ops.fitbridge.spawn_r15()
+if abs(spec.lowest_point(spec.rig("Normal"))) > 1e-9:
+    fail("the stand-in R15 should stand on the ground")
+zs = [v.co.z for o in bpy.data.collections["FitBridge R15"].objects for v in o.data.vertices]
+if not 0 <= min(zs) < 0.01:
+    fail(f"spawned R15 feet at {min(zs)}")
+bpy.ops.fitbridge.spawn_r6()
+r6x = [v.co.x for o in bpy.data.collections["FitBridge R6 preview"].objects for v in o.data.vertices]
+r15x = [v.co.x for o in bpy.data.collections["FitBridge R15"].objects for v in o.data.vertices]
+if max(r6x) >= min(r15x):                                # Roblox +X (character's right) = Blender -X
+    fail("the R6 preview should stand beside the R15, not inside it")
 if "Normal" not in server.state["need_rigs"]:
     fail("spawning an uncached scale should ask Studio for that rig")
 ctx.view_layer.update()
@@ -158,7 +168,7 @@ if not res["ok"]:
 done.append("hat inside HatAttachment (Normal), offset (-0.3, 0.3, -0.2) in Roblox space, 12 tris, 0.1 gap ok")
 
 # --- too high and floating
-hat.location.z = 3.5
+hat.location.z = 6.5
 ctx.view_layer.update()
 res = evaluate.evaluate(ctx)
 by = {c["id"]: c for c in res["checks"]}
@@ -174,7 +184,7 @@ st.override = True
 if not bpy.ops.fitbridge.send.poll():
     fail("override should enable Send")
 st.override = False
-hat.location.z = 2.1
+hat.location.z = 5.1
 done.append("too high: 'Top (Y): 0.65 studs over', floating 1.50 warns, Send blocked unless overridden")
 
 # --- modifiers count; materials; textures; UVs
@@ -443,11 +453,11 @@ if code != 409 or "Update the other plugin" not in e["error"]:
 server.state["protocol_mismatch"] = None
 done.append("live rules (real Studio shape) override limits + boxes, matched to 'Classic', 1024 textures, rigid_allowed; protocol mismatch -> 409")
 
-head = {"name": "Head", "size": [1.2, 1.2, 1.2], "cframe": [0, 1.6, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+head = {"name": "Head", "size": [1.2, 1.2, 1.2], "cframe": [0, 4.6, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
         "mesh": {"positions": [-0.6, -0.6, -0.6, 0.6, -0.6, -0.6, 0, 0.6, 0, 0, -0.6, 0.6], "triangles": [0, 1, 2, 0, 2, 3, 0, 3, 1, 1, 3, 2]}}
 code, _ = post("/v1/rig", {"protocol": 1, "body_scale": "Normal", "parts": [head],
                            "attachments": [{"name": "HatAttachment", "part": "Head",
-                                            "world_cframe": [0, 2.2, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]}]})
+                                            "world_cframe": [0, 5.2, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]}]})
 if "rig:Normal" in get("/v1/hello")[1]["needs"]:
     fail("rig need should clear")
 fitbridge.process_inbox()
@@ -463,6 +473,43 @@ fitbridge.process_inbox()
 if fitbridge._status["last_result"]["message"] != "Built Hat.":
     fail("result")
 done.append("rig POST cached + swaps the box rig, attachment frame used; result shown")
+
+# --- the classic head shape, and stale (pre-grounding) cached rigs
+leg = {"name": "LeftFoot", "size": [1, 0.3, 1], "cframe": [-0.5, 0.15, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1], "mesh": None}
+chead = {"name": "Head", "size": [1, 1, 1], "cframe": [0, 4.5, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1], "mesh": None,
+         "shape": {"kind": "classic_head", "scale": [1.2, 1.2, 1.2]}}
+post("/v1/rig", {"protocol": 1, "body_scale": "Slender", "parts": [leg, chead], "attachments": []})
+fitbridge.process_inbox()
+V, T = geom.part_mesh(chead)
+ext = V.max(0) - V.min(0)
+if not np.allclose(ext, [1.2, 1.2, 1.2], atol=1e-6) or len(V) < 100:
+    fail(f"classic head = rounded cylinder of size x scale: {ext} {len(V)}")
+a, b, c = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+if np.einsum("ij,ij->i", a, np.cross(b, c)).sum() <= 0:
+    fail("classic head faces outward")
+r = np.hypot(V[:, 0], V[:, 2])
+mid = np.abs(V[:, 1]) < 0.3
+if not np.allclose(r[mid], 0.6, atol=1e-6) or r[np.abs(V[:, 1]) > 0.599].max() > 0.55:
+    fail("straight sides, rounded top / bottom edges")
+st.body_scale = "Slender"
+bpy.ops.fitbridge.spawn_r15()
+heads = [o for o in bpy.data.collections["FitBridge R15"].objects if o.name.startswith("Head")]
+if not heads or len(heads[0].data.vertices) < 100:
+    fail("the spawned R15 head should be the rounded cylinder")
+old = {"body_scale": "Classic", "parts": [{"name": "LeftFoot", "size": [1, 0.3, 1],
+                                           "cframe": [-0.5, -2.85, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1], "mesh": None}],
+       "attachments": []}
+(spec.cache_dir() / "rig_Classic.json").write_text(json.dumps(old))
+spec._rigs.pop("Classic", None)
+if spec.cached_rig("Classic") is not None:
+    fail("a rig with its feet at y = -3 is stale")
+st.body_scale = "Classic"
+bpy.ops.fitbridge.spawn_r15()
+if "rig:Classic" not in get("/v1/hello")[1]["needs"]:
+    fail("a stale rig should be asked for again")
+st.body_scale = "Normal"
+done.append("classic_head drawn as a rounded cylinder (size x scale); rigs below y = -0.05 are stale and re-requested; "
+            "R15 stands on the ground, R6 beside it")
 
 # --- off again
 st.thumb_view = False

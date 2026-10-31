@@ -11,6 +11,8 @@ from . import geom, spec
 
 R15_COLL = "FitBridge R15"
 R6_COLL = "FitBridge R6 preview"
+R6_SIDE = 4.0                  # the R6 preview stands 4 studs to the character's right (Roblox +X), beside the R15
+INSET = 0.004                  # boxes shrink this much (display only) so touching faces don't z-fight
 CAM_NAME = "FitBridge Thumbnail"
 
 
@@ -61,16 +63,20 @@ def spawn_r15(context, scale):
     coll["fitbridge_scale"] = scale
     coll["fitbridge_source"] = "standin" if data.get("standin") else "studio"
     for p in data["parts"]:
-        m = p.get("mesh")
-        if m and m.get("positions") and m.get("triangles"):
-            V = np.asarray(m["positions"], float).reshape(-1, 3)
-            T = np.asarray(m["triangles"], np.int64)
-        else:
-            V, T = geom.box_mesh(p["size"])
+        V, T = geom.part_mesh(p)
+        if not (p.get("mesh") or {}).get("positions"):
+            V = _inset(V)
         C = geom.cframe_to_matrix(p["cframe"])
         Vw = (V @ C[:3, :3].T + C[:3, 3]) @ geom.P.T
         _part_object(coll, p["name"], Vw, T)
     return coll
+
+
+def _inset(V):
+    """pull a generated part in by INSET on every side, so coplanar faces of touching parts don't flicker"""
+    c = (V.max(axis=0) + V.min(axis=0)) / 2
+    half = np.maximum((V.max(axis=0) - V.min(axis=0)) / 2, 1e-9)
+    return c + (V - c) * np.maximum(half - INSET, half * 0.5) / half
 
 
 def spawned_r15():
@@ -85,7 +91,7 @@ def spawn_r6(context):
     coll = _collection(context, R6_COLL)
     for name, p in spec.SPEC["r6_preview"]["parts"].items():
         V, T = geom.box_mesh(p["size"])
-        Vw = (V + np.asarray(p["cframe"][:3], float)) @ geom.P.T
+        Vw = (_inset(V) + np.asarray(p["cframe"][:3], float) + (R6_SIDE, 0, 0)) @ geom.P.T
         _part_object(coll, name, Vw, T)
     return coll
 

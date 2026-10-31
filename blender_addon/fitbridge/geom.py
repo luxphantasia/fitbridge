@@ -142,6 +142,56 @@ def box_mesh(size):
     return box_corners(np.eye(4), size), np.array(BOX_TRIS, np.int64)
 
 
+def rounded_cylinder(size, segments=24, bevel_steps=4):
+    """a vertical (Y) cylinder with rounded top and bottom edges filling a box of size (the classic Roblox head)"""
+    rx, h, rz = size[0] / 2, size[1] / 2, size[2] / 2
+    b = 0.25 * min(rx, rz, h)                                  # rounding radius, as a share of the radius
+    prof = [(0.0, -h)]                                         # (radius share, y) from the bottom centre up
+    for i in range(bevel_steps + 1):
+        a = -math.pi / 2 + (math.pi / 2) * i / bevel_steps
+        prof.append((1 - b / max(rx, 1e-9) * (1 - math.cos(a)), -h + b + b * math.sin(a)))
+    for i in range(bevel_steps + 1):
+        a = (math.pi / 2) * i / bevel_steps
+        prof.append((1 - b / max(rx, 1e-9) * (1 - math.cos(a)), h - b + b * math.sin(a)))
+    prof.append((0.0, h))
+    V = [(0.0, -h, 0.0)]
+    ring = []
+    for r, y in prof[1:-1]:
+        row = []
+        for k in range(segments):
+            t = 2 * math.pi * k / segments
+            row.append(len(V))
+            V.append((r * rx * math.cos(t), y, r * rz * math.sin(t)))
+        ring.append(row)
+    top = len(V)
+    V.append((0.0, h, 0.0))
+    T = []
+    for k in range(segments):
+        k2 = (k + 1) % segments
+        T.append((0, ring[0][k], ring[0][k2]))
+        for j in range(len(ring) - 1):
+            a0, a1, b0, b1 = ring[j][k], ring[j][k2], ring[j + 1][k], ring[j + 1][k2]
+            T += [(a0, b0, a1), (a1, b0, b1)]
+        T.append((top, ring[-1][k2], ring[-1][k]))
+    V, T = np.array(V), np.array(T, np.int64)
+    a, b_, c = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+    if np.einsum("ij,ij->i", a, np.cross(b_, c)).sum() < 0:   # face outward
+        T = T[:, ::-1].copy()
+    return V, T
+
+
+def part_mesh(p):
+    """a rig part's geometry in its own frame: Studio's mesh, else its shape, else a box of its size"""
+    m = p.get("mesh")
+    if m and m.get("positions") and m.get("triangles"):
+        return np.asarray(m["positions"], float).reshape(-1, 3), np.asarray(m["triangles"], np.int64).reshape(-1, 3)
+    shape = p.get("shape") or {}
+    if shape.get("kind") == "classic_head":
+        sc = shape.get("scale") or (1, 1, 1)
+        return rounded_cylinder([s * k for s, k in zip(p["size"], sc)])
+    return box_mesh(p["size"])
+
+
 def pow2(n):
     return n > 0 and (n & (n - 1)) == 0
 

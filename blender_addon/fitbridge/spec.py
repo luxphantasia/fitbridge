@@ -166,7 +166,7 @@ def save_rules(body):
 
 # --------------------------------------------------------------------------------------------------------------- rig
 
-# A stand-in R15 made of boxes (Roblox space, root part at the origin, like Studio's rig after PivotTo(0, 0, 0)).
+# A stand-in R15 made of boxes (Roblox space), standing with its lowest point at y = 0 like Studio's rig.
 # Roughly the classic blocky R15; the exact rig per body scale comes from Studio.
 _STANDIN_PARTS = {
     "Head": ((2, 1, 1), (0, 1.5, 0)),
@@ -198,21 +198,43 @@ _STANDIN_ATTS = {
 }
 
 
+_STANDIN_LIFT = 3.0            # the table above has the root at the origin (feet bottom at -3)
+
+
 def standin_rig(scale):
     ident = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+    def up(p):
+        return [p[0], p[1] + _STANDIN_LIFT, p[2]]
     return {"body_scale": scale, "standin": True,
-            "parts": [{"name": n, "size": list(s), "cframe": list(p) + ident, "mesh": None}
+            "parts": [{"name": n, "size": list(s), "cframe": up(p) + ident, "mesh": None}
                       for n, (s, p) in _STANDIN_PARTS.items()],
-            "attachments": [{"name": n, "part": part, "world_cframe": list(p) + ident}
+            "attachments": [{"name": n, "part": part, "world_cframe": up(p) + ident}
                             for n, (part, p) in _STANDIN_ATTS.items()]}
+
+
+def lowest_point(rig_data):
+    """the rig's lowest Y (Roblox space), from each part's corners"""
+    from .geom import box_corners, cframe_to_matrix
+    lo = float("inf")
+    for p in rig_data.get("parts") or []:
+        c = box_corners(cframe_to_matrix(p["cframe"]), p["size"])
+        lo = min(lo, float(c[:, 1].min()))
+    return lo if lo != float("inf") else 0.0
 
 
 _rigs = {}
 
 
 def cached_rig(scale):
+    """the synced rig, or None. Rigs cached before Studio stood them on the ground (feet at y = -3) are stale: they
+    count as missing, so spawning asks Studio for a new one."""
     if scale not in _rigs:
-        _rigs[scale] = _read(f"rig_{scale}.json")
+        data = _read(f"rig_{scale}.json")
+        if data is not None and lowest_point(data) < -0.05:
+            print(f"FitBridge: the cached {scale} rig is from before rigs stood on the ground; asking Studio again")
+            data = None
+        _rigs[scale] = data
     return _rigs[scale]
 
 

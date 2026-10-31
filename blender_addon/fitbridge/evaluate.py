@@ -153,12 +153,7 @@ def _part_tree(rig_data, part_name):
     for p in rig_data["parts"]:
         if p["name"] != part_name:
             continue
-        m = p.get("mesh")
-        if m and m.get("positions") and m.get("triangles"):
-            V = np.asarray(m["positions"], float).reshape(-1, 3)
-            T = np.asarray(m["triangles"], np.int64).reshape(-1, 3)
-        else:
-            V, T = geom.box_mesh(p["size"])
+        V, T = geom.part_mesh(p)
         C = geom.cframe_to_matrix(p["cframe"])
         Vw = (V @ C[:3, :3].T + C[:3, 3]) @ geom.P.T              # Roblox world -> Blender world
         # +1 when the triangles face outward (positive volume), so "inside" works whatever the winding
