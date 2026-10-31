@@ -249,11 +249,12 @@ class FB_PT_main(bpy.types.Panel):
 
         box = lay.box()
         box.label(text="Rig", icon="ARMATURE_DATA")
-        box.prop(st, "body_scale")
         row = box.row(align=True)
         cur = rig.shown()
         row.operator("fitbridge.show_rig", text="R15", icon="OUTLINER_OB_ARMATURE", depress=cur == "R15").kind = "R15"
         row.operator("fitbridge.show_rig", text="R6 preview", icon="MESH_CUBE", depress=cur == "R6").kind = "R6"
+        if cur == "R15":                                         # body scales only exist for the R15
+            box.prop(st, "body_scale")
         key = "R6" if cur == "R6" else st.body_scale
         if spec.rig_outdated(key):
             col = box.column(align=True)

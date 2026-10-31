@@ -478,7 +478,7 @@ done.append("live rules (real Studio shape) override limits + boxes, matched to 
 
 head = {"name": "Head", "size": [1.2, 1.2, 1.2], "cframe": [0, 4.6, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
         "mesh": {"positions": [-0.6, -0.6, -0.6, 0.6, -0.6, -0.6, 0, 0.6, 0, 0, -0.6, 0.6], "triangles": [0, 1, 2, 0, 2, 3, 0, 3, 1, 1, 3, 2]}}
-code, _ = post("/v1/rig", {"protocol": 1, "rig_version": 2, "body_scale": "Normal", "parts": [head],
+code, _ = post("/v1/rig", {"protocol": 1, "rig_version": spec.RIG_VERSION, "body_scale": "Normal", "parts": [head],
                            "attachments": [{"name": "HatAttachment", "part": "Head",
                                             "world_cframe": [0, 5.2, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]}]})
 if "rig:Normal" in get("/v1/hello")[1]["needs"]:
@@ -501,7 +501,7 @@ done.append("rig POST cached + swaps the box rig, attachment frame used; result 
 leg = {"name": "LeftFoot", "size": [1, 0.3, 1], "cframe": [-0.5, 0.15, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1], "mesh": None}
 chead = {"name": "Head", "size": [1, 1, 1], "cframe": [0, 4.5, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1], "mesh": None,
          "shape": {"kind": "classic_head", "scale": [1.2, 1.2, 1.2]}}
-post("/v1/rig", {"protocol": 1, "rig_version": 2, "body_scale": "Slender", "parts": [leg, chead], "attachments": []})
+post("/v1/rig", {"protocol": 1, "rig_version": spec.RIG_VERSION, "body_scale": "Slender", "parts": [leg, chead], "attachments": []})
 fitbridge.process_inbox()
 V, T = geom.part_mesh(chead)
 ext = V.max(0) - V.min(0)
@@ -534,9 +534,9 @@ st.body_scale = "Normal"
 done.append("classic_head drawn as a rounded cylinder (size x scale); rigs below y = -0.05 are stale and re-requested; "
             "R15 stands on the ground; R15 / R6 toggle in one place; per-part insets; mesh-less Head = classic head")
 
-# --- rig_version 2: older synced rigs still show but are asked for again; the R6 preview gets real meshes
+# --- rig_version: older synced rigs still show but are asked for again; the R6 preview gets real meshes
 cube = {"positions": [-0.5, -0.5, -0.5, 0.5, -0.5, -0.5, 0, 0.5, 0, 0, -0.5, 0.5], "triangles": [0, 1, 2, 0, 2, 3, 0, 3, 1, 1, 3, 2]}
-v1 = {"body_scale": "Normal", "parts": [{"name": "Head", "size": [1, 1, 1], "cframe": [0, 4.5, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+v1 = {"body_scale": "Normal", "rig_version": spec.RIG_VERSION - 1, "parts": [{"name": "Head", "size": [1, 1, 1], "cframe": [0, 4.5, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
                                           "mesh": cube}],
       "attachments": [{"name": "HatAttachment", "part": "Head", "world_cframe": [0, 5, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]}]}
 (spec.cache_dir() / "rig_Normal.json").write_text(json.dumps(v1))
@@ -553,7 +553,7 @@ if coll["fitbridge_source"] != "outdated" or len(coll.objects) != 1:
 if "rig:Normal" not in get("/v1/hello")[1]["needs"]:
     fail("an outdated rig should be asked for again")
 dyn = {"name": "Head", "size": [1.2, 1.2, 1.2], "cframe": [0, 4.6, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1], "mesh": cube}
-post("/v1/rig", {"protocol": 1, "rig_version": 2, "body_scale": "Normal", "parts": [dyn, leg],
+post("/v1/rig", {"protocol": 1, "rig_version": spec.RIG_VERSION, "body_scale": "Normal", "parts": [dyn, leg],
                  "attachments": v1["attachments"]})
 fitbridge.process_inbox()
 coll = bpy.data.collections["FitBridge R15"]
@@ -567,7 +567,7 @@ r6parts = [{"name": n, "size": [1, 2, 1], "cframe": [x, 1, 0, 1, 0, 0, 0, 1, 0, 
            for n, x in (("Left Leg", -0.5), ("Right Leg", 0.5))]
 r6parts.append({"name": "Head", "size": [2, 1, 1], "cframe": [0, 4.5, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1], "mesh": None,
                 "shape": {"kind": "classic_head", "scale": [1.25, 1.25, 1.25]}})
-post("/v1/rig", {"protocol": 1, "rig_version": 2, "rig_type": "R6", "body_scale": "R6", "parts": r6parts, "attachments": []})
+post("/v1/rig", {"protocol": 1, "rig_version": spec.RIG_VERSION, "rig_type": "R6", "body_scale": "R6", "parts": r6parts, "attachments": []})
 if "rig:R6" in get("/v1/hello")[1]["needs"]:
     fail("rig:R6 should clear when it arrives")
 fitbridge.process_inbox()
@@ -577,7 +577,7 @@ if rigmod.spawned_r6_source() != "studio" or len(c6.objects) != 3:
 if not (spec.cache_dir() / "rig_R6.json").exists():
     fail("R6 rig should be cached")
 bpy.ops.fitbridge.show_rig(kind="R15")
-done.append("rig_version 2: older rigs shown but re-asked, v2 swaps in; R6 boxes until Studio's real R6 arrives")
+done.append("older rig_version shown but re-asked, current swaps in; R6 boxes until Studio's real R6 arrives")
 
 # --- off again
 st.thumb_view = False

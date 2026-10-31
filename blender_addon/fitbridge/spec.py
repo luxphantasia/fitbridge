@@ -224,7 +224,7 @@ def lowest_point(rig_data):
 
 
 _rigs = {}
-RIG_VERSION = 2            # v2: R15 with the Default Dynamic Head as a real mesh, and real R6 meshes ("R6" rigs)
+RIG_VERSION = 3            # v2: Dynamic Head stand-in + real R6 meshes; v3: Normal / Slender from Studio's Rthro mannequin
 
 
 def cached_rig(scale):
