@@ -302,12 +302,6 @@ def handle_frame(res):
     return res["A"] @ geom.translation(res["fit"]["offset"])
 
 
-def default_camera(res):
-    """6 studs in front (-Z) of the Handle, looking at its centre (Roblox world)"""
-    H = handle_frame(res)
-    return H @ geom.look_at([0, 0, -6], [0, 0, 0])
-
-
 def build_mesh(res):
     """positions / normals / uvs / triangles in the attachment frame, centred, split per corner"""
     m = res["mesh"]
@@ -360,14 +354,11 @@ def build_package(context, res, revision, override):
         blobs[f"/v1/package/texture/{k}"] = {"protocol": 1, "sha256": sha, "width": w, "height": h,
                                              "rgba_base64": base64.b64encode(rgba.tobytes()).decode(),
                                              "png_path": str(png)}
-    cam = st.thumb_camera
-    if cam is not None:
-        C = geom.unscaled(geom.swap(np.array(cam.matrix_world)))
-        fov = cam.data.angle_y * 180 / np.pi if cam.data.sensor_fit == "VERTICAL" else spec.SPEC["thumbnail"]["field_of_view"]
-    else:
-        C = default_camera(res)
-        fov = spec.SPEC["thumbnail"]["field_of_view"]
-    cam_cf = geom.matrix_to_cframe(np.linalg.inv(handle_frame(res)) @ C)
+    from . import thumb
+    g, _ob = thumb.owner(context)
+    thumb.sync(context, res)
+    cam_cf = thumb.camera_cframe(res, g)
+    fov = thumb.FOV
     sendable = res["ok"] or override
     manifest = {
         "protocol": 1, "revision": revision,
