@@ -486,7 +486,10 @@ def _restore_orbit():
 
 
 def _fix_scales():
-    """files saved with a body scale that's no longer offered (Normal / Slender) go back to Classic"""
+    """files saved with a body scale that's no longer offered (Normal / Slender) go back to Classic; thumbnail cameras
+    stay hidden unless Thumbnail view is on"""
+    if not any(getattr(sc, "fitbridge", None) and sc.fitbridge.thumb_view for sc in bpy.data.scenes):
+        thumb.show_cameras(False)
     for sc in bpy.data.scenes:
         st = getattr(sc, "fitbridge", None)
         if st is not None and st.body_scale not in spec.OFFERED_SCALES:

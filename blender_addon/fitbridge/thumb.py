@@ -293,6 +293,7 @@ def view_on(context):
     st = sc.fitbridge
     g, ob = owner(context)
     cam = ensure_camera(context, g, ob)
+    show_cameras(True)
     res = LIVE["result"]
     if res is not None and res.get("A") is not None:
         sync(context, res)
@@ -342,6 +343,7 @@ def view_off(context):
         sc.camera = cam if cam is not None and cam.users_scene else None
     st.thumb_saved = ""
     _hide_rigs(False)
+    show_cameras(False)
     for area in _view3d_areas(context):
         sp = area.spaces.active
         r3 = sp.region_3d
@@ -354,6 +356,13 @@ def view_off(context):
         r3.view_perspective = v["persp"] if v["persp"] != "CAMERA" else "PERSP"
         r3.view_location, r3.view_rotation, r3.view_distance = v["loc"], v["rot"], v["dist"]
         sp.lock_camera = v["lock"]
+
+
+def show_cameras(show):
+    """the thumbnail cameras only show while you're in Thumbnail view"""
+    coll = bpy.data.collections.get(COLL)
+    if coll is not None and coll.hide_viewport == show:
+        coll.hide_viewport = not show
 
 
 def _view3d_areas(context):
