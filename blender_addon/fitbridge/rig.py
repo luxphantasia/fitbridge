@@ -66,7 +66,7 @@ def _collection(context, name):
     return coll
 
 
-SMOOTH_ANGLE = math.radians(60)    # Studio-like shading: soft across bevels, hard on real corners
+SMOOTH_ANGLE = math.radians(60)    # Studio-like shading: soft across bevels, hard on real corners (+ weighted normals)
 
 
 def _part_object(coll, name, V, T):
@@ -79,8 +79,18 @@ def _part_object(coll, name, V, T):
     ob = bpy.data.objects.new(name, me)
     ob["fitbridge_rig"] = True
     ob.hide_select = True
+    _weighted_normals(ob)
     coll.objects.link(ob)
     return ob
+
+
+def _weighted_normals(ob):
+    """Roblox's rig parts carry area-weighted normals: big flat faces stay flat and only the narrow bevels curve.
+    Blender's Weighted Normal modifier (face area, sharp edges kept) gives the same shading."""
+    mod = ob.modifiers.new("Weighted Normals", "WEIGHTED_NORMAL")
+    mod.mode = "FACE_AREA"
+    mod.weight = 100                                         # the biggest face wins: flat faces stay flat
+    mod.keep_sharp = True
 
 
 def shown():
