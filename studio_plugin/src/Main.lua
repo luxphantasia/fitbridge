@@ -7,6 +7,7 @@
 
 local HttpService = game:GetService("HttpService")
 local AssetService = game:GetService("AssetService")
+local InsertService = game:GetService("InsertService")
 local Players = game:GetService("Players")
 local Selection = game:GetService("Selection")
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
@@ -459,6 +460,71 @@ end
 
 local lastBuilt: Accessory? = nil
 
+-- The MeshPart inside the model Blender uploaded through Open Cloud (mesh + textures, owned by the creator).
+local function loadUploadedPart(assetId)
+	local ok, objects = pcall(function()
+		return game:GetObjects("rbxassetid://" .. assetId)
+	end)
+	if not ok or not objects or #objects == 0 then
+		local ok2, model = pcall(function()
+			return InsertService:LoadAsset(tonumber(assetId))
+		end)
+		if not ok2 then
+			return nil, tostring(model)
+		end
+		objects = { model }
+	end
+	local best: MeshPart? = nil
+	for _, obj in objects do
+		local list = obj:GetDescendants()
+		table.insert(list, obj)
+		for _, d in list do
+			if d:IsA("MeshPart") and (not best or d.Size.Magnitude > best.Size.Magnitude) then
+				best = d
+			end
+		end
+	end
+	if not best then
+		return nil, "the uploaded model has no MeshPart"
+	end
+	local part = best:Clone()
+	for _, child in part:GetChildren() do
+		if not child:IsA("SurfaceAppearance") then
+			child:Destroy()
+		end
+	end
+	for name in part:GetAttributes() do
+		part:SetAttribute(name, nil)
+	end
+	return part, nil
+end
+
+-- 0 or 180: how far Roblox's importer turned the mesh about Y (see PROTOCOL.md, Uploading).
+local function detectTurn(part: MeshPart, mesh, size: Vector3)
+	local ok, em = pcall(function()
+		return AssetService:CreateEditableMeshAsync(Content.fromUri(part.MeshId))
+	end)
+	if not ok or not em then
+		return 0, "couldn't read the uploaded mesh to check its orientation; assumed unturned"
+	end
+	local scale = size / part.MeshSize
+	local actual = {}
+	for _, vid in em:GetVertices() do
+		local p = em:GetPosition(vid) * scale
+		table.insert(actual, p.X)
+		table.insert(actual, p.Y)
+		table.insert(actual, p.Z)
+	end
+	em:Destroy()
+	local deg = Geometry.bestYRotation(mesh.positions, actual)
+	return deg, nil
+end
+
+local UPLOAD_NOTES = {
+	off = "Preview only: add your Open Cloud API key in Blender's FitBridge preferences to make it uploadable.",
+	pending = "Preview only: Blender is still uploading to Roblox. Studio rebuilds when it's done.",
+}
+
 local function build(manifest)
 	local mesh, err = request("GET", "/v1/package/mesh")
 	if not mesh then
@@ -471,44 +537,80 @@ local function build(manifest)
 	local checks = Geometry.studioChecks(manifest, mesh, rules)
 	local problems = {}
 
-	local meshId, meshErr, previewMesh = meshAssetId(manifest, mesh)
-	local uploaded = meshId ~= nil
-	local textureIds, textureMaps = {}, {}
-	for map, info in manifest.textures or {} do
-		if info then
-			local id, texErr, previewImage = textureAssetId(manifest, map, info)
-			if id then
-				textureIds[map] = id
-				textureMaps[map] = id
-			else
-				uploaded = false
-				textureMaps[map] = previewImage
-				table.insert(problems, texErr)
+	local handle = nil
+	local uploaded = false
+	local uploadNote = nil
+	local turn = CFrame.new()
+	local upload = manifest.upload
+	local meshId, textureIds = nil, {}
+	if upload and upload.state == "done" and upload.model_asset_id then
+		local part, loadErr = loadUploadedPart(upload.model_asset_id)
+		if part then
+			local deg, turnErr = detectTurn(part, mesh, v3(manifest.mesh.size))
+			if deg == 180 then
+				turn = CFrame.Angles(0, math.pi, 0)
+			end
+			if turnErr then
+				table.insert(problems, turnErr)
+			end
+			if part.TextureID == "" and not part:FindFirstChildOfClass("SurfaceAppearance") and manifest.textures.color then
+				table.insert(problems, "The uploaded model came without its texture.")
+			end
+			handle = part
+			uploaded = true
+			meshId = upload.model_asset_id
+			uploadNote = ("Uploaded as model %s%s"):format(
+				tostring(upload.model_asset_id),
+				if deg == 180 then " (Roblox's importer turned it 180°; compensated)" else ""
+			)
+		else
+			uploadNote = "Couldn't load uploaded model " .. tostring(upload.model_asset_id) .. ": " .. tostring(loadErr)
+		end
+	elseif upload and upload.state == "failed" then
+		uploadNote = "Upload failed: " .. tostring(upload.message)
+	elseif upload then
+		uploadNote = UPLOAD_NOTES[upload.state]
+	end
+
+	if not handle then
+		-- Preview: try the plugin upload API (not available yet), else show the in-memory mesh.
+		local pluginMeshId, meshErr, previewMesh = meshAssetId(manifest, mesh)
+		local pluginUploaded = pluginMeshId ~= nil
+		local textureMaps = {}
+		for map, info in manifest.textures or {} do
+			if info then
+				local id, texErr, previewImage = textureAssetId(manifest, map, info)
+				if id then
+					textureIds[map] = id
+					textureMaps[map] = id
+				else
+					pluginUploaded = false
+					textureMaps[map] = previewImage
+					if not uploadNote then
+						table.insert(problems, texErr)
+					end
+				end
 			end
 		end
-	end
-	table.insert(checks, {
-		id = "uploaded",
-		status = if uploaded then "pass" else "fail",
-		message = if uploaded
-			then "Mesh and textures are uploaded assets"
-			else "Preview only: Studio couldn't upload the mesh/textures (" .. tostring(meshErr or problems[1]) .. ")",
-	})
-
-	local okPart, handle = pcall(function()
-		if meshId then
-			return AssetService:CreateMeshPartAsync(Content.fromUri("rbxassetid://" .. meshId))
-		end
-		return AssetService:CreateMeshPartAsync(Content.fromObject(previewMesh))
-	end)
-	if not okPart and meshId then
-		okPart, handle = pcall(function()
-			return (AssetService :: any):CreateMeshPartAsync("rbxassetid://" .. meshId)
+		local okPart, part = pcall(function()
+			if pluginMeshId then
+				return AssetService:CreateMeshPartAsync(Content.fromUri("rbxassetid://" .. pluginMeshId))
+			end
+			return AssetService:CreateMeshPartAsync(Content.fromObject(previewMesh))
 		end)
+		if not okPart then
+			return nil, { "Couldn't create the MeshPart: " .. tostring(part) }, checks
+		end
+		handle = part
+		setTexture(handle, manifest.pbr, textureMaps)
+		uploaded = pluginUploaded
+		meshId = pluginMeshId
+		uploadNote = uploadNote
+			or (if pluginUploaded
+				then "Mesh and textures uploaded from Studio"
+				else "Preview only: Studio can't upload (" .. tostring(meshErr) .. ")")
 	end
-	if not okPart then
-		return nil, { "Couldn't create the MeshPart: " .. tostring(handle) }, checks
-	end
+	table.insert(checks, { id = "uploaded", status = if uploaded then "pass" else "fail", message = uploadNote })
 
 	local recording = ChangeHistoryService:TryBeginRecording("FitBridge build " .. manifest.name)
 
@@ -522,11 +624,10 @@ local function build(manifest)
 	handle.CanQuery = false
 	handle.Massless = true
 	handle.Anchored = false
-	setTexture(handle, manifest.pbr, textureMaps)
 
 	local attachment = Instance.new("Attachment")
 	attachment.Name = manifest.attachment
-	attachment.CFrame = CFrame.new(-v3(manifest.mesh.offset))
+	attachment.CFrame = turn * CFrame.new(-v3(manifest.mesh.offset))
 	attachment.Parent = handle
 
 	local accessory = Instance.new("Accessory")
@@ -545,7 +646,7 @@ local function build(manifest)
 	target.Parent = cfg
 	local camValue = Instance.new("CFrameValue")
 	camValue.Name = "ThumbnailCameraValue"
-	camValue.Value = cframeFrom(manifest.thumbnail.camera_cframe)
+	camValue.Value = turn * cframeFrom(manifest.thumbnail.camera_cframe)
 	camValue.Parent = cfg
 	cfg.Parent = accessory
 
@@ -733,15 +834,20 @@ local function buildCurrent()
 	if result then
 		rulesLabel.Text = "Rules: " .. result.rulesSource
 	end
-	local failed = false
+	local failed, uploadCheck = false, nil
 	for _, c in checks or {} do
-		if c.status == "fail" then
+		if c.id == "uploaded" then
+			uploadCheck = c
+		elseif c.status == "fail" then
 			failed = true
 		end
 	end
 	local message
 	if not result then
 		message = "Build failed: " .. table.concat(problems or {}, "; ")
+	elseif not failed and uploadCheck and uploadCheck.status == "fail" then
+		message = "Built " .. manifest.name .. " (fit is right). " .. uploadCheck.message
+		failed = true
 	elseif failed then
 		message = "Built " .. manifest.name .. ", but some checks fail (see list). Fix in Blender and send again."
 	else
@@ -820,6 +926,7 @@ end)
 ---------------------------------------------------------------- polling
 
 local lastSent = nil
+local lastUploadBuilt = nil
 local sentRules = false
 local sentRigs = {}
 
@@ -843,15 +950,25 @@ task.spawn(function()
 			if hello then
 				connLabel.Text = ("Blender: connected (%s %s)"):format(hello.app or "?", hello.app_version or "")
 				pcall(handleNeeds, hello.needs)
+				-- Build on a new Send (preview), then again once Blender's Open Cloud upload for it is done.
+				local uploadDone = hello.upload_state == "done" and hello.upload_revision == hello.sent_revision
 				if lastSent == nil then
 					lastSent = hello.sent_revision -- don't rebuild an old send on first connect
+					lastUploadBuilt = if uploadDone then hello.sent_revision else nil
 				elseif hello.sent_revision and hello.sent_revision ~= lastSent then
 					lastSent = hello.sent_revision
+					lastUploadBuilt = nil
 					if autoBuild then
+						if uploadDone then
+							lastUploadBuilt = hello.sent_revision
+						end
 						pcall(buildCurrent)
 					else
 						statusLabel.Text = "New version sent from Blender. Press Build now."
 					end
+				elseif uploadDone and lastUploadBuilt ~= hello.sent_revision and autoBuild then
+					lastUploadBuilt = hello.sent_revision
+					pcall(buildCurrent)
 				end
 			else
 				connLabel.Text = "Blender: " .. tostring(err)

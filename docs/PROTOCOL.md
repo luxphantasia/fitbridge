@@ -144,5 +144,38 @@ Studio builds a real R15 avatar for one body scale (`Players:CreateHumanoidModel
 ```
 `mesh` is null when Studio can't read the part's mesh. Blender then draws that part as a box of `size`. The rig is posed exactly as Roblox would wear it, so the body attachments are exact. No Roblox mesh files ship inside the addon.
 
+## Uploading through Open Cloud (v1.1)
+
+Studio plugins can't upload assets yet (`CreateAssetAsync` reports "not available yet"), so **Blender uploads** with the user's Open Cloud API key. Lux types the key into the addon preferences themselves. It never travels over the bridge, never goes in a manifest or log, and never goes through chat.
+
+**Blender preferences:** API key (Assets API read + write), creator type (`User` or `Group`) and creator id. The creator must be the one that will submit the UGC item, because Roblox checks that the mesh and textures belong to the uploader.
+
+**On Send:**
+1. Freeze the package snapshot (as before) and bump `sent_revision` straight away. Studio builds a preview from the raw mesh right away, so you get feedback in seconds.
+2. If the mesh `sha256` plus every texture `sha256` is already in the upload cache, reuse that `model_asset_id`. Otherwise export a `.glb` from the **snapshot's wire data**: centred positions in Roblox space, normals, UVs with V flipped back for glTF, and the texture maps as a glTF material (PBR maps go in when `pbr` is true). Then `POST https://apis.roblox.com/assets/v1/assets` (multipart: `request` JSON with `assetType: "Model"`, `displayName`, `description`, `creationContext.creator.userId|groupId`, plus `fileContent` with the glb), and poll `GET /assets/v1/operations/{id}` until `done`.
+   - Cache key: mesh sha plus texture shas, so moving or rotating the item never re-uploads it.
+3. The manifest gains an `upload` block, and `/v1/hello` gains `upload_state` so Studio knows when to rebuild:
+
+```json
+"upload": { "state": "pending" | "done" | "failed" | "off",
+            "model_asset_id": 1234567890,
+            "creator": { "type": "Group", "id": 123 },
+            "message": "Uploading to Roblox… (operation 1a2b)" }
+```
+`/v1/hello` gets `"upload_state"` (the same value) and `"upload_revision"` (the `sent_revision` that upload belongs to).
+- `off` means no API key is set. Studio then only builds previews and says "Add your Open Cloud key in Blender preferences to make this uploadable."
+- `failed` carries Roblox's error sentence in `message`.
+
+**Studio, when `upload.state` becomes `done` for the current revision:**
+1. Load the model (`game:GetObjects("rbxassetid://" .. model_asset_id)`, falling back to `InsertService:LoadAsset`) and take its MeshPart. That gives `MeshId` plus `TextureID` or a `SurfaceAppearance`, all owned by the creator.
+2. **Orientation check:** Roblox's importer may turn a mesh 180° around Y. Studio reads the uploaded mesh (`AssetService:CreateEditableMeshAsync`), samples the manifest vertices and picks whichever of `R = identity` or `R = 180° about Y` matches. If R isn't identity, Studio folds it in:
+   - `Attachment.CFrame = R · CFrame.new(-offset)`
+   - `ThumbnailCameraValue = R · camera_cframe`
+   - `Handle.Size = |R · size|`
+   It reports which R it used in the result.
+3. Rebuild the Accessory the same way as the preview build, with the uploaded MeshPart as the Handle, and post the result with `"uploaded": true`.
+
+**GLB writing:** write the `.glb` straight from the wire arrays with a small glTF writer (positions as-is, `v_gltf = 1 - v_wire`, PNG images embedded), not with Blender's glTF exporter. That way no axis conversion happens behind our back, and the orientation check in Studio only has to catch Roblox's own importer behaviour.
+
 ## Errors
 Any non-2xx response has `{ "protocol": 1, "error": "human readable sentence" }`. Show that sentence as-is.

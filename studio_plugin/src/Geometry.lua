@@ -117,6 +117,37 @@ function Geometry.base64ToBuffer(s: string): buffer
 	return out
 end
 
+-- Roblox's importer may turn an uploaded mesh 180° about Y. Compare evenly spaced samples of the
+-- expected positions (rotated by each candidate) with the uploaded mesh's vertices, scored by mean
+-- nearest-neighbour distance. Returns 0 or 180 (degrees) and both scores.
+function Geometry.bestYRotation(expected: { number }, actual: { number }, samples: number?): (number, number, number)
+	local n = #expected // 3
+	local m = #actual // 3
+	local count = math.min(samples or 64, n)
+	local function score(flip: boolean): number
+		local total = 0
+		for k = 0, count - 1 do
+			local i = (k * n) // count
+			local x, y, z = expected[i * 3 + 1], expected[i * 3 + 2], expected[i * 3 + 3]
+			if flip then
+				x, z = -x, -z
+			end
+			local best = math.huge
+			for j = 0, m - 1 do
+				local dx, dy, dz = actual[j * 3 + 1] - x, actual[j * 3 + 2] - y, actual[j * 3 + 3] - z
+				local d = dx * dx + dy * dy + dz * dz
+				if d < best then
+					best = d
+				end
+			end
+			total += math.sqrt(best)
+		end
+		return total / math.max(count, 1)
+	end
+	local same, flipped = score(false), score(true)
+	return if flipped < same then 180 else 0, same, flipped
+end
+
 -- Studio-side re-check of a package manifest + mesh against the active rules.
 -- `rules` = { maxTriangles, maxTextureSize, size = Vec, offset = Vec }.
 function Geometry.studioChecks(manifest: any, mesh: any, rules: any): { Check }

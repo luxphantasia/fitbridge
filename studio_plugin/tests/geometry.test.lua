@@ -55,6 +55,19 @@ check("studio: bounds pass", byId.bounds == "pass")
 check("studio: 4k texture fails", byId.texture_color == "fail")
 check("studio: tris pass", byId.triangles == "pass")
 
+-- An asymmetric shape: a point sticking out the front (-Z) and one to the right (+X).
+local shape = { 0, 0, -1, 1, 0, 0, 0, 0.5, 0, -0.2, -0.3, 0.4 }
+local rot = Geometry.bestYRotation(shape, shape)
+check("orientation: identical mesh is 0°", rot == 0)
+local turned = {}
+for i = 1, #shape, 3 do
+	table.insert(turned, -shape[i])
+	table.insert(turned, shape[i + 1])
+	table.insert(turned, -shape[i + 2])
+end
+rot = Geometry.bestYRotation(shape, turned)
+check("orientation: importer-turned mesh is 180°", rot == 180)
+
 if failures > 0 then
 	error(failures .. " test(s) failed")
 end

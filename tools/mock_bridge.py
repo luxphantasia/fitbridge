@@ -2,6 +2,8 @@
 
   python3 tools/mock_bridge.py                 # listen on 127.0.0.1:47231
   curl -X POST 127.0.0.1:47231/mock/send       # act like pressing "Send to Studio"
+  python3 tools/mock_bridge.py 47231 --model-asset-id 123   # also pretend Open Cloud uploaded that model
+                                                            # (it reports "done" 5 s after each send)
 
 Lets the Studio plugin be tested without Blender, and is the reference the Blender addon must match.
 Whatever Studio POSTs back (rules, rigs, results) is saved under tools/mock_out/.
@@ -12,10 +14,13 @@ import hashlib
 import json
 import math
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 47231
+ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+PORT = int(ARGS[0]) if ARGS else 47231
+MODEL_ASSET_ID = int(sys.argv[sys.argv.index("--model-asset-id") + 1]) if "--model-asset-id" in sys.argv else None
 OUT = Path(__file__).resolve().parent / "mock_out"
 OUT.mkdir(exist_ok=True)
 
@@ -62,7 +67,15 @@ tex_sha = hashlib.sha256(tex).hexdigest()
 xs, ys, zs = positions[0::3], positions[1::3], positions[2::3]
 size = [max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)]
 
-state = {"revision": 1, "sent": 0, "needs": ["rules", "rig:Normal"]}
+state = {"revision": 1, "sent": 0, "sent_at": 0.0, "needs": ["rules", "rig:Normal"]}
+
+
+def upload():
+    if MODEL_ASSET_ID is None:
+        return {"state": "off", "model_asset_id": None, "creator": None, "message": "No Open Cloud key (mock)"}
+    if time.time() - state["sent_at"] < 5:
+        return {"state": "pending", "model_asset_id": None, "creator": None, "message": "Uploading to Roblox (mock)"}
+    return {"state": "done", "model_asset_id": MODEL_ASSET_ID, "creator": {"type": "User", "id": 0}, "message": "Uploaded (mock)"}
 
 
 def manifest():
@@ -82,6 +95,7 @@ def manifest():
         "sendable": True,
         "override": False,
         "spec_source": "mock",
+        "upload": upload(),
     }
 
 
@@ -111,7 +125,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/v1/hello":
             self._send(200, {"protocol": 1, "app": "FitBridge Mock", "app_version": "0.0", "blender_version": "mock",
-                             "package_revision": state["revision"], "sent_revision": state["sent"], "needs": state["needs"]})
+                             "package_revision": state["revision"], "sent_revision": state["sent"], "needs": state["needs"],
+                             "upload_state": upload()["state"], "upload_revision": state["sent"]})
         elif self.path == "/v1/package":
             self._send(200, manifest())
         elif self.path == "/v1/package/mesh":
@@ -127,6 +142,7 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b"{}"
         if self.path == "/mock/send":
             state["sent"] += 1
+            state["sent_at"] = time.time()
             self._send(200, {"protocol": 1, "sent_revision": state["sent"]})
             print(f"sent_revision -> {state['sent']}")
             return
