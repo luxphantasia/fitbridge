@@ -17,7 +17,7 @@ STUDIO_SESSION_GAP = 15.0      # a gap this long means a new Studio session (ask
 lock = threading.Lock()
 inbox = queue.Queue()
 state = {
-    "hello": {"app": "FitBridge Blender", "app_version": "0.2.2", "blender_version": "?"},
+    "hello": {"app": "FitBridge Blender", "app_version": "0.3.0", "blender_version": "?"},
     "package_revision": 0,
     "sent_revision": 0,
     "blobs": {},                # path -> JSON bytes (mesh, textures) of the last Send
@@ -116,7 +116,8 @@ class Handler(BaseHTTPRequestHandler):
                 state["need_rules"] = False
         elif path == "/v1/rig":
             with lock:
-                state["need_rigs"].discard(body.get("body_scale"))
+                key = "R6" if body.get("rig_type") == "R6" or body.get("body_scale") == "R6" else body.get("body_scale")
+                state["need_rigs"].discard(key)
         inbox.put((path, body))
         self._send(200, {"protocol": PROTOCOL})
 
