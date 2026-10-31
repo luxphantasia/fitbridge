@@ -1026,11 +1026,8 @@ button("Sync rules + rigs to Blender", function()
 	statusLabel.Text = "Sending rules and rigs…"
 	local ok, err = sendRules()
 	local msgs = { if ok then "Rules sent." else "Rules: " .. tostring(err) }
-	local names = { "R6" }
-	for name in SPEC.body_scales do
-		table.insert(names, name)
-	end
-	for _, name in names do
+	-- Blender only offers Classic (plus the R6 preview). Normal and Slender are still built if Blender asks.
+	for _, name in { "R6", "Classic" } do
 		local okRig, rigErr = sendRig(name)
 		table.insert(msgs, if okRig then name .. " rig sent." else name .. " rig: " .. tostring(rigErr))
 	end
