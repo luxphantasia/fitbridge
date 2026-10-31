@@ -60,6 +60,12 @@ def _thumb_changed(self, context):
         thumb.view_off(context)
 
 
+def _lock_tilt_changed(context):
+    if context.scene.fitbridge.thumb_view:
+        p = prefs()
+        thumb.tilt_lock(context, bool(p and p.lock_tilt))
+
+
 def _shot_changed(self, context):
     """a slider moved: that's you framing the shot"""
     if thumb._quiet["n"]:
@@ -119,6 +125,10 @@ class FB_Prefs(bpy.types.AddonPreferences):
                                         "only sent to apis.roblox.com, never over the bridge")
     creator_type: EnumProperty(name="Creator", items=[("User", "User", ""), ("Group", "Group", "")])
     welcomed: BoolProperty(default=False, options={"HIDDEN"})
+    lock_tilt: BoolProperty(name="Lock tilt", default=True, update=lambda self, context: _lock_tilt_changed(context),
+                            description="While framing the thumbnail, orbit as Turntable so the camera never rolls "
+                                        "sideways (your own orbit style comes back when you leave Thumbnail view)")
+    saved_orbit: StringProperty(options={"HIDDEN"})          # your orbit style while Lock tilt borrows it
     creator_id: StringProperty(name="Creator id",
                                description="The user or group that will submit the UGC item (Roblox checks that "
                                            "it owns the mesh and textures)")
@@ -366,7 +376,11 @@ class FB_PT_main(bpy.types.Panel):
             row = box.row(align=True)
             row.prop(g, "pan_x", text="Pan X")
             row.prop(g, "pan_y", text="Pan Y")
-            box.operator("fitbridge.thumb_preview", icon="RENDER_STILL")
+            row = box.row(align=True)
+            row.operator("fitbridge.thumb_preview", icon="RENDER_STILL")
+            p = prefs()
+            if p is not None:
+                row.prop(p, "lock_tilt", toggle=True, icon="LOCKED" if p.lock_tilt else "UNLOCKED")
             if res is not None and res.get("fit") is not None and thumb.out_of_frame(res, g):
                 box.label(text="Part of the accessory is out of frame", icon="ERROR")
             col = box.column(align=True)
@@ -461,6 +475,16 @@ def _on_depsgraph(scene, depsgraph):
     _dirty["flag"] = True
 
 
+def _restore_orbit():
+    """a Blender that closed while Lock tilt borrowed the orbit style gets the user's own one back"""
+    p = prefs()
+    if p is not None and p.saved_orbit and not any(getattr(sc, "fitbridge", None) and sc.fitbridge.thumb_view
+                                                   for sc in bpy.data.scenes):
+        bpy.context.preferences.inputs.view_rotate_method = p.saved_orbit
+        p.saved_orbit = ""
+    return None
+
+
 def _fix_scales():
     """files saved with a body scale that's no longer offered (Normal / Slender) go back to Classic"""
     for sc in bpy.data.scenes:
@@ -494,12 +518,15 @@ def register():
     bpy.app.handlers.load_post.append(_on_load)
     bpy.app.timers.register(_tick, first_interval=0.2, persistent=True)
     bpy.app.timers.register(_fix_scales, first_interval=0.1)
+    bpy.app.timers.register(_restore_orbit, first_interval=0.3)
     draw.register()
 
 
 def unregister():
     draw.unregister()
-    for t in (_tick, _fix_scales):
+    if bpy.context.scene and getattr(bpy.context.scene, "fitbridge", None) is not None:
+        thumb.tilt_lock(bpy.context, False)                   # never leave the user's orbit style borrowed
+    for t in (_tick, _fix_scales, _restore_orbit):
         if bpy.app.timers.is_registered(t):
             bpy.app.timers.unregister(t)
     for lst, fn in ((bpy.app.handlers.depsgraph_update_post, _on_depsgraph), (bpy.app.handlers.load_post, _on_load)):
