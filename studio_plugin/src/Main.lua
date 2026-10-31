@@ -18,6 +18,7 @@ local StudioService = game:GetService("StudioService")
 local SPEC = HttpService:JSONDecode([==[--#SPEC]==])
 
 local PROTOCOL = 1
+local RIG_VERSION = 2 -- bump when what /v1/rig sends changes, so Blender re-asks
 local BASE_URL = plugin:GetSetting("FitBridgeURL") or "http://127.0.0.1:47231"
 local FOLDER_NAME = "FitBridge"
 local ATTR = "FitBridge"
@@ -185,12 +186,18 @@ end
 
 ---------------------------------------------------------------- rig
 
+-- `scaleName` is a body scale from the spec, or "R6" for the classic preview rig.
 local function makeRig(scaleName)
-	local scale = SPEC.body_scales[scaleName] or SPEC.body_scales.Classic
 	local desc = Instance.new("HumanoidDescription")
-	desc.BodyTypeScale = scale.humanoid_description.BodyTypeScale
-	desc.ProportionScale = scale.humanoid_description.ProportionScale
-	local rig = Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
+	local rigType = Enum.HumanoidRigType.R15
+	if scaleName == "R6" then
+		rigType = Enum.HumanoidRigType.R6
+	else
+		local scale = SPEC.body_scales[scaleName] or SPEC.body_scales.Classic
+		desc.BodyTypeScale = scale.humanoid_description.BodyTypeScale
+		desc.ProportionScale = scale.humanoid_description.ProportionScale
+	end
+	local rig = Players:CreateHumanoidModelFromDescription(desc, rigType)
 	rig.Name = "FitBridge_" .. scaleName
 	rig:SetAttribute(ATTR .. "Scale", scaleName)
 	for _, d in rig:GetDescendants() do
@@ -230,28 +237,78 @@ local function readMesh(meshId: string, scale: Vector3)
 	return { positions = positions, triangles = triangles }
 end
 
--- A body part's shape for Blender: its mesh (MeshPart or SpecialMesh file), else a shape hint.
--- The default R15 head is a Part with a SpecialMesh of type Head (the classic rounded head), which has no
--- mesh file to read, so Blender draws that shape itself from `shape = { kind = "classic_head", scale }`.
+-- Read a mesh and stretch its box to exactly `size` (for stand-in meshes that aren't the part's own).
+local function fittedMesh(meshId: string, size: Vector3)
+	local mesh = readMesh(meshId, Vector3.one)
+	if not mesh then
+		return nil
+	end
+	local mn, mx = Geometry.minMax(mesh.positions)
+	local k = { size.X / math.max(mx[1] - mn[1], 1e-6), size.Y / math.max(mx[2] - mn[2], 1e-6), size.Z / math.max(mx[3] - mn[3], 1e-6) }
+	for i = 1, #mesh.positions, 3 do
+		for a = 1, 3 do
+			mesh.positions[i + a - 1] = (mesh.positions[i + a - 1] - (mn[a] + mx[a]) / 2) * k[a]
+		end
+	end
+	return mesh
+end
+
+-- Classic R6 body meshes that ship with Studio (the default R6 parts are plain blocks of the same size).
+local R6_MESHES = {
+	Torso = "rbxasset://avatar/meshes/torso.mesh",
+	["Left Arm"] = "rbxasset://avatar/meshes/leftarm.mesh",
+	["Right Arm"] = "rbxasset://avatar/meshes/rightarm.mesh",
+	["Left Leg"] = "rbxasset://avatar/meshes/leftleg.mesh",
+	["Right Leg"] = "rbxasset://avatar/meshes/rightleg.mesh",
+}
+local CLASSIC_HEAD = "rbxasset://avatar/heads/head.mesh"
+
+-- A body part's shape for Blender: its mesh, a stand-in mesh (`approximate = true`), or a shape hint.
+-- The default R15 head is a Dynamic Head MeshPart, but Studio won't read Roblox-owned meshes
+-- ("no permission to load asset"), so it gets the classic head mesh fitted to the head's real size.
+-- The part's size, cframe and attachments are always the real ones.
 local function partShape(part: BasePart)
 	if part:IsA("MeshPart") then
-		return readMesh(part.MeshId, part.Size / part.MeshSize), nil
+		local mesh = readMesh(part.MeshId, part.Size / part.MeshSize)
+		if mesh then
+			return mesh, nil, false
+		end
+		if part.Name == "Head" then
+			local standIn = fittedMesh(CLASSIC_HEAD, part.Size)
+			if standIn then
+				return standIn, nil, true
+			end
+			return nil, { kind = "classic_head", scale = { 1, 1, 1 } }, true
+		end
+		return nil, nil, true
 	end
 	local special = part:FindFirstChildOfClass("SpecialMesh")
 	if special then
 		if special.MeshType == Enum.MeshType.FileMesh then
-			return readMesh(special.MeshId, special.Scale), nil
+			return readMesh(special.MeshId, special.Scale), nil, false
 		elseif special.MeshType == Enum.MeshType.Head then
-			return nil, { kind = "classic_head", scale = arr(special.Scale) }
+			-- MeshType.Head is drawn as a 1-stud rounded head (the part's smallest side) times Scale.
+			local side = math.min(part.Size.X, part.Size.Y, part.Size.Z)
+			local mesh = fittedMesh(CLASSIC_HEAD, special.Scale * side)
+			if mesh then
+				return mesh, nil, false
+			end
+			return nil, { kind = "classic_head", scale = arr(special.Scale) }, false
 		end
 	end
-	return nil, nil
+	if R6_MESHES[part.Name] then
+		local mesh = fittedMesh(R6_MESHES[part.Name], part.Size)
+		if mesh then
+			return mesh, nil, false
+		end
+	end
+	return nil, nil, false
 end
 
 local function sendRig(scaleName)
 	local ok, rig = pcall(makeRig, scaleName)
 	if not ok then
-		return false, "Couldn't build the R15 rig: " .. tostring(rig)
+		return false, "Couldn't build the " .. scaleName .. " rig: " .. tostring(rig)
 	end
 	rig.Parent = workspace -- joints only resolve in the DataModel
 	-- Stand it on the ground (feet at y = 0) facing -Z, like the R6 preview, instead of centring the root on the origin.
@@ -270,13 +327,14 @@ local function sendRig(scaleName)
 	local parts, attachments = {}, {}
 	for _, d in rig:GetDescendants() do
 		if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
-			local mesh, shape = partShape(d)
+			local mesh, shape, approximate = partShape(d)
 			table.insert(parts, {
 				name = d.Name,
 				size = arr(d.Size),
 				cframe = cframeArr(d.CFrame),
 				mesh = mesh,
 				shape = shape,
+				approximate = approximate or nil,
 			})
 		elseif d:IsA("Attachment") and not string.find(d.Name, "RigAttachment") then
 			table.insert(attachments, { name = d.Name, part = d.Parent.Name, world_cframe = cframeArr(d.WorldCFrame) })
@@ -285,6 +343,8 @@ local function sendRig(scaleName)
 	rig:Destroy()
 	local _, err = request("POST", "/v1/rig", {
 		protocol = PROTOCOL,
+		rig_version = RIG_VERSION,
+		rig_type = if scaleName == "R6" then "R6" else "R15",
 		body_scale = scaleName,
 		parts = parts,
 		attachments = attachments,
@@ -928,7 +988,11 @@ button("Sync rules + rigs to Blender", function()
 	statusLabel.Text = "Sending rules and rigs…"
 	local ok, err = sendRules()
 	local msgs = { if ok then "Rules sent." else "Rules: " .. tostring(err) }
+	local names = { "R6" }
 	for name in SPEC.body_scales do
+		table.insert(names, name)
+	end
+	for _, name in names do
 		local okRig, rigErr = sendRig(name)
 		table.insert(msgs, if okRig then name .. " rig sent." else name .. " rig: " .. tostring(rigErr))
 	end
