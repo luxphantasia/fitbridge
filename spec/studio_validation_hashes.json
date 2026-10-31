@@ -1,0 +1,10 @@
+{
+  "validation/validateMeshBounds.lua": "9f869a21c0b58f6bc895746b53bdc2d1ed448a2feccc84330a7ed1e26856cdc9",
+  "validation/validateThumbnailConfiguration.lua": "b59991609cff45cc438b5a11cbf94ae4fa14d719774e57c8cdb0564b337df9e6",
+  "validation/validateMeshPartAccessory.lua": "a9e6702479ed1e45afda076150c2c3f85a17611a5a8823f8484c6c4fb87562ab",
+  "validation/validateMeshTriangles.lua": "6458c7cef307b708871799aa897469368efdc3a2001a6c115607b3ebca55219f",
+  "util/createMeshPartAccessorySchema.lua": "ab60793965dde18cba6717c37046d25af40fe89ae10b401be3821d69f70ee24b",
+  "util/ValidationRulesUtil.lua": "d7801c548a116950cfc553601f6a12a315a847341a88d5d7b08812d29184b27a",
+  "validationFolders/AttributesAllowed/AttributesAllowed.lua": "87818bfa0b15a5791ee88cd168cd1db916e802cbf463a567bb47499e8f8bfc61",
+  "Constants.lua": "dbcb361df6a02417593b205328b7ce85e687e20d885b4ab99cd0169b139460f7"
+}

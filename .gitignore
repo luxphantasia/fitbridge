@@ -1,0 +1,4 @@
+studio_plugin/dist/
+tools/mock_out/
+__pycache__/
+.DS_Store
