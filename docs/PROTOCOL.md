@@ -60,7 +60,7 @@ The thumbnail camera is sent relative to the worn Handle: `camera_cframe = (A ·
 ```
 Studio polls this about once a second while its panel is open.
 - When `sent_revision` goes up (the user pressed **Send to Studio**), Studio fetches the package and builds it automatically.
-- `needs` lists what Blender wants from Studio. Studio answers with `POST /v1/rules` and `POST /v1/rig` for each `rig:<Scale>`. Blender asks for `rules` once per Studio session, and for a rig whenever the user spawns a scale it doesn't have cached yet.
+- `needs` lists what Blender wants from Studio. Studio answers with `POST /v1/rules` and `POST /v1/rig` for each `rig:<Scale>` (including `rig:R6`). Blender asks for `rules` once per Studio session, and for a rig whenever the user spawns a scale it doesn't have cached yet.
 
 ### `GET /v1/package`
 The current accessory: its manifest only, without the heavy data.
@@ -135,18 +135,28 @@ Studio sends the output of `AvatarCreationService:GetValidationRules()`, convert
 Live rules give **one** box per attachment, not one per body scale. On the first sync the addon records which scale column in the bundled spec they match, and logs it so we learn which scale Roblox validates against.
 
 ### `POST /v1/rig` (Studio to Blender)
-Studio builds a real R15 avatar for one body scale (`Players:CreateHumanoidModelFromDescription` with the spec's `BodyTypeScale` and `ProportionScale`) and sends it to Blender:
+Studio builds a real avatar and sends it to Blender. For a body scale it's an R15 (`Players:CreateHumanoidModelFromDescription` with the spec's `BodyTypeScale` and `ProportionScale`); for `rig:R6` it's the classic R6 preview rig.
 ```json
-{ "protocol": 1, "body_scale": "Normal",
+{ "protocol": 1, "rig_version": 2, "rig_type": "R15", "body_scale": "Normal",
   "parts": [ { "name": "Head", "size": [..], "cframe": [12 numbers],
-               "mesh": { "positions": [..], "triangles": [..] } | null } ],
+               "mesh": { "positions": [..], "triangles": [..] } | null,
+               "shape": { .. } | null, "approximate": true } ],
   "attachments": [ { "name": "HatAttachment", "part": "Head", "world_cframe": [12 numbers] } ] }
 ```
-The rig stands on the ground: its lowest point is at y = 0, it's centred on x/z = 0 and it faces -Z, like the R6 preview.
+- `rig_type` is `"R15"` or `"R6"`. The R6 rig is sent with `body_scale: "R6"`. File it as `rig_R6`.
+- `rig_version` (missing means 1) goes up whenever what Studio sends changes. Blender treats a cached rig with a lower version as outdated and asks for it again on the next spawn.
+- The rig stands on the ground: its lowest point is at y = 0, it's centred on x/z = 0 and it faces -Z.
+- `size`, `cframe` and the attachments are always the real ones, so fitting is exact whatever the mesh looks like.
 
-`mesh` is null when Studio can't read the part's mesh. Then `shape` may say what to draw instead:
-- `{ "kind": "classic_head", "scale": [x, y, z] }`: the default R15 head is a Part with a SpecialMesh of type Head (the classic rounded head), which has no mesh file. Draw a vertical cylinder with rounded top and bottom edges, of size `size × scale` (Roblox renders it roughly 1.2 × 1.2 × 1.2 on a 1-stud part; matching the silhouette is enough, because nothing is validated against it).
-- No `shape`: draw a box of `size`. The rig is posed exactly as Roblox would wear it, so the body attachments are exact. No Roblox mesh files ship inside the addon.
+**Meshes (rig_version 2):**
+- R15 body parts carry their real meshes, read with `CreateEditableMeshAsync` and scaled to the part.
+- The R15 **Head** is the default Dynamic Head (a MeshPart). Studio won't read Roblox-owned meshes ("no permission to load asset"), so `mesh` is a stand-in: Studio's classic head mesh (`rbxasset://avatar/heads/head.mesh`) stretched to the head's real `size`, with `"approximate": true`. Its HatAttachment, HairAttachment and the rest come from the real Dynamic Head.
+- R6 parts carry Studio's classic body meshes (`rbxasset://avatar/meshes/torso.mesh`, `leftarm.mesh` and so on) fitted to each part's size, and the head is the classic head mesh at its rendered size.
+- `approximate` is left out when the mesh is the part's own.
+
+When `mesh` is null, `shape` may say what to draw instead:
+- `{ "kind": "classic_head", "scale": [x, y, z] }`: a vertical cylinder with rounded top and bottom edges, of size `size × scale` (Roblox renders it roughly 1.2 × 1.2 × 1.2 on a 1-stud part; matching the silhouette is enough, because nothing is validated against it).
+- No `shape`: draw a box of `size`. No Roblox mesh files ship inside the addon.
 
 ## Uploading through Open Cloud (v1.1)
 
