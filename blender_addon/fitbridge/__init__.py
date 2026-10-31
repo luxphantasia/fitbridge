@@ -216,15 +216,19 @@ class FB_OT_thumb_preset(bpy.types.Operator):
                                ("THREE_Q", "3/4", "Three-quarter view, on the item's side"),
                                ("SIDE", "Side", "From the item's side"),
                                ("BACK", "Back", "From behind"),
-                               ("TOP", "Top", "From above")])
+                               ("TOP", "Top", "From above"),
+                               ("ROBLOX", "Roblox", "The exact shot Roblox's own UGC Thumbnail Tool starts from")])
 
     @classmethod
     def description(cls, context, props):
         return {"FRONT": "Straight from the front", "THREE_Q": "Three-quarter view, on the item's side",
-                "SIDE": "From the item's side", "BACK": "From behind", "TOP": "From above"}[props.angle]
+                "SIDE": "From the item's side", "BACK": "From behind", "TOP": "From above",
+                "ROBLOX": "The exact shot Roblox's own UGC Thumbnail Tool starts from (needs a fitted mesh)"}[props.angle]
 
     def execute(self, context):
-        thumb.preset(context, self.angle)
+        if not thumb.preset(context, self.angle):
+            self.report({"WARNING"}, "Pick your accessory mesh first")
+            return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -353,7 +357,7 @@ class FB_PT_main(bpy.types.Panel):
         if st.thumb_view:
             row = box.row(align=True)
             for key, label in (("FRONT", "Front"), ("THREE_Q", "3/4"), ("SIDE", "Side"), ("BACK", "Back"),
-                               ("TOP", "Top")):
+                               ("TOP", "Top"), ("ROBLOX", "Roblox")):
                 row.operator("fitbridge.thumb_preset", text=label).angle = key
             col = box.column(align=True)
             col.prop(g, "turn")
@@ -368,7 +372,7 @@ class FB_PT_main(bpy.types.Panel):
             col = box.column(align=True)
             col.scale_y = 0.8
             col.label(text="Orbit / pan / zoom the view to move the camera", icon="INFO")
-            col.label(text="Keep it inside the inner frame: Roblox may zoom closer")
+            col.label(text="Circle: the Handle fit Roblox's own tool frames")
             if gob is None:
                 col.label(text="Pick your accessory mesh to give it its own shot")
         elif g.manual:

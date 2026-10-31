@@ -373,6 +373,18 @@ if abs(math.degrees(math.atan2(L5[0, 2], -L5[2, 2])) - 90) > 1e-3:
 bpy.ops.fitbridge.thumb_preset(angle="BACK")
 if abs(abs(g.turn) - 180) > 1e-6:
     fail("Back preset")
+bpy.ops.fitbridge.thumb_preset(angle="ROBLOX")
+res, Lr = shot()
+want = thumb.roblox_shot(res)
+if not np.allclose(Lr, want, atol=1e-5):
+    fail("the Roblox preset should reproduce Roblox's UGC Thumbnail Tool default exactly")
+d = Lr[:3, 3] / np.linalg.norm(Lr[:3, 3])
+if not (d[0] < 0 and d[2] < 0 and d[1] > 0) or abs(np.linalg.norm(Lr[:3, 3]) * thumb.TAN
+                                                    - np.linalg.norm(res["fit"]["size"]) / 2) > 1e-5:
+    fail("Roblox default: front-left, above, Handle sphere filling the 70 deg view")
+man_cf = geom.cframe_to_matrix(thumb.camera_cframe(res, g))
+if not np.allclose(man_cf, want, atol=1e-4):
+    fail("what's sent should be exactly that shot, relative to the Handle")
 bpy.ops.fitbridge.reset_camera()
 res, L6 = shot()
 if g.manual or not np.allclose(L6, L, atol=1e-5):
@@ -424,7 +436,7 @@ except RuntimeError as e:
 if ctx.scene.render.engine == "BLENDER_WORKBENCH" and preview_note == "preview renders":
     pass
 done.append("thumbnail: own camera per accessory, hat from front-right-above, back item from behind, follows the item, "
-            "your camera moves become the shot (no re-aim after), sliders + presets, reset, deleted camera comes "
+            "your camera moves become the shot (no re-aim after), sliders + presets, Roblox-tool preset exact, reset, deleted camera comes "
             "back, out-of-frame warning; " + preview_note)
 
 # --- send
