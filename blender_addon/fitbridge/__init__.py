@@ -64,8 +64,8 @@ def _poll_mesh(self, ob):
 
 
 class FB_Settings(bpy.types.PropertyGroup):
-    body_scale: EnumProperty(name="Body scale", items=[(s, s, spec.SPEC["body_scales"][s]["label"]) for s in spec.SCALES],
-                             default="Normal", update=_scale_changed)
+    body_scale: EnumProperty(name="Body scale", items=[(s, s, spec.SPEC["body_scales"][s]["label"]) for s in spec.OFFERED_SCALES],
+                             default=spec.OFFERED_SCALES[0], update=_scale_changed)
     acc_type: EnumProperty(name="Type", items=[(t, t, "") for t in spec.RIGID_TYPES], update=_type_changed)
     attachment: EnumProperty(name="Attachment", items=_attachment_items, update=mark_dirty)
     target: PointerProperty(name="Mesh", type=bpy.types.Object, poll=_poll_mesh, update=mark_dirty,
@@ -253,7 +253,7 @@ class FB_PT_main(bpy.types.Panel):
         cur = rig.shown()
         row.operator("fitbridge.show_rig", text="R15", icon="OUTLINER_OB_ARMATURE", depress=cur == "R15").kind = "R15"
         row.operator("fitbridge.show_rig", text="R6 preview", icon="MESH_CUBE", depress=cur == "R6").kind = "R6"
-        if cur == "R15":                                         # body scales only exist for the R15
+        if cur == "R15" and len(spec.OFFERED_SCALES) > 1:        # body scales only exist for the R15
             box.prop(st, "body_scale")
         key = "R6" if cur == "R6" else st.body_scale
         if spec.rig_outdated(key):
@@ -373,8 +373,18 @@ def _on_depsgraph(scene, depsgraph):
     _dirty["flag"] = True
 
 
+def _fix_scales():
+    """files saved with a body scale that's no longer offered (Normal / Slender) go back to Classic"""
+    for sc in bpy.data.scenes:
+        st = getattr(sc, "fitbridge", None)
+        if st is not None and st.body_scale not in spec.OFFERED_SCALES:
+            st.body_scale = spec.OFFERED_SCALES[0]
+    return None
+
+
 @bpy.app.handlers.persistent
 def _on_load(*_args):
+    _fix_scales()
     _dirty["flag"] = True
     evaluate.LIVE["result"] = None
 
@@ -393,13 +403,15 @@ def register():
     bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
     bpy.app.handlers.load_post.append(_on_load)
     bpy.app.timers.register(_tick, first_interval=0.2, persistent=True)
+    bpy.app.timers.register(_fix_scales, first_interval=0.1)
     draw.register()
 
 
 def unregister():
     draw.unregister()
-    if bpy.app.timers.is_registered(_tick):
-        bpy.app.timers.unregister(_tick)
+    for t in (_tick, _fix_scales):
+        if bpy.app.timers.is_registered(t):
+            bpy.app.timers.unregister(t)
     for lst, fn in ((bpy.app.handlers.depsgraph_update_post, _on_depsgraph), (bpy.app.handlers.load_post, _on_load)):
         if fn in lst:
             lst.remove(fn)

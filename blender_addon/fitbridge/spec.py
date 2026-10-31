@@ -10,6 +10,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SPEC = json.loads((HERE / "ugc_spec.json").read_text())
 SCALES = list(SPEC["body_scales"])
+# What the addon offers. Studio can't load the Rthro mannequin's meshes (Normal / Slender), and Roblox's live rules
+# check every upload against the Classic boxes anyway, so only Classic is offered (Lux, 2026-10-31). Rigs Studio sends
+# for the other scales are still accepted and cached.
+OFFERED_SCALES = ["Classic"]
 TYPES = list(SPEC["accessory_types"])
 # types Roblox lets you upload as rigid accessories (Eyebrow / Eyelash must be layered, so they're left out)
 RIGID_TYPES = [t for t in TYPES if SPEC["accessory_types"][t].get("rigid_allowed", True)]
