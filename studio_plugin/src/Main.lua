@@ -18,7 +18,7 @@ local StudioService = game:GetService("StudioService")
 local SPEC = HttpService:JSONDecode([==[--#SPEC]==])
 
 local PROTOCOL = 1
-local RIG_VERSION = 2 -- bump when what /v1/rig sends changes, so Blender re-asks
+local RIG_VERSION = 3 -- bump when what /v1/rig sends changes, so Blender re-asks
 local BASE_URL = plugin:GetSetting("FitBridgeURL") or "http://127.0.0.1:47231"
 local FOLDER_NAME = "FitBridge"
 local ATTR = "FitBridge"
@@ -186,6 +186,8 @@ end
 
 ---------------------------------------------------------------- rig
 
+local RTHRO_MANNEQUIN = "rbxasset://models/Thumbnails/Mannequins/Rthro.rbxm"
+
 -- `scaleName` is a body scale from the spec, or "R6" for the classic preview rig.
 local function makeRig(scaleName)
 	local desc = Instance.new("HumanoidDescription")
@@ -197,7 +199,24 @@ local function makeRig(scaleName)
 		desc.BodyTypeScale = scale.humanoid_description.BodyTypeScale
 		desc.ProportionScale = scale.humanoid_description.ProportionScale
 	end
-	local rig = Players:CreateHumanoidModelFromDescription(desc, rigType)
+	local rig
+	if rigType == Enum.HumanoidRigType.R15 and desc.BodyTypeScale > 0 then
+		-- Rthro scales use Studio's own Rthro mannequin, as its thumbnailer does (MannequinUtility). Scaling
+		-- the blocky body by BodyTypeScale gives a different, taller shape with different attachments.
+		rig = game:GetObjects(RTHRO_MANNEQUIN)[1]
+		local humanoid = rig:FindFirstChildOfClass("Humanoid")
+		rig.PrimaryPart = rig:FindFirstChild("HumanoidRootPart")
+		rig.Parent = workspace -- the Humanoid only rescales in the DataModel
+		for name, value in { BodyTypeScale = desc.BodyTypeScale, BodyProportionScale = desc.ProportionScale } do
+			local v = humanoid:FindFirstChild(name) or Instance.new("NumberValue")
+			v.Name = name
+			v.Value = value
+			v.Parent = humanoid
+		end
+		task.wait(1)
+	else
+		rig = Players:CreateHumanoidModelFromDescription(desc, rigType)
+	end
 	rig.Name = "FitBridge_" .. scaleName
 	rig:SetAttribute(ATTR .. "Scale", scaleName)
 	for _, d in rig:GetDescendants() do
@@ -263,9 +282,27 @@ local R6_MESHES = {
 }
 local CLASSIC_HEAD = "rbxasset://avatar/heads/head.mesh"
 
+-- The default blocky R15 body's mesh ids by part name. Studio can read these, so they stand in for
+-- body meshes it won't read (the Rthro mannequin's are Roblox-owned).
+local blockyMeshIds: { [string]: string }? = nil
+local function blockyMeshId(partName: string): string?
+	if not blockyMeshIds then
+		blockyMeshIds = {}
+		local rig = Players:CreateHumanoidModelFromDescription(Instance.new("HumanoidDescription"), Enum.HumanoidRigType.R15)
+		for _, d in rig:GetDescendants() do
+			if d:IsA("MeshPart") then
+				blockyMeshIds[d.Name] = d.MeshId
+			end
+		end
+		rig:Destroy()
+	end
+	return blockyMeshIds[partName]
+end
+
 -- A body part's shape for Blender: its mesh, a stand-in mesh (`approximate = true`), or a shape hint.
--- The default R15 head is a Dynamic Head MeshPart, but Studio won't read Roblox-owned meshes
--- ("no permission to load asset"), so it gets the classic head mesh fitted to the head's real size.
+-- Studio won't read Roblox-owned meshes ("no permission to load asset"): the default Dynamic Head and the
+-- Rthro mannequin's parts. Heads then get the classic head mesh and body parts the blocky R15 mesh of the
+-- same name, each fitted to the part's real size.
 -- The part's size, cframe and attachments are always the real ones.
 local function partShape(part: BasePart)
 	if part:IsA("MeshPart") then
@@ -280,7 +317,8 @@ local function partShape(part: BasePart)
 			end
 			return nil, { kind = "classic_head", scale = { 1, 1, 1 } }, true
 		end
-		return nil, nil, true
+		local blocky = blockyMeshId(part.Name)
+		return if blocky then fittedMesh(blocky, part.Size) else nil, nil, true
 	end
 	local special = part:FindFirstChildOfClass("SpecialMesh")
 	if special then

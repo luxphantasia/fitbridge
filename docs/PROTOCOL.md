@@ -148,8 +148,13 @@ Studio builds a real avatar and sends it to Blender. For a body scale it's an R1
 - The rig stands on the ground: its lowest point is at y = 0, it's centred on x/z = 0 and it faces -Z.
 - `size`, `cframe` and the attachments are always the real ones, so fitting is exact whatever the mesh looks like.
 
-**Meshes (rig_version 2):**
-- R15 body parts carry their real meshes, read with `CreateEditableMeshAsync` and scaled to the part.
+**Bodies (rig_version 3):**
+- **Classic** is `CreateHumanoidModelFromDescription` with default scales.
+- **Normal** and **Slender** are Studio's own Rthro mannequin (`rbxasset://models/Thumbnails/Mannequins/Rthro.rbxm`), scaled with BodyTypeScale 1 and BodyProportionScale 0 or 1. That's what Studio's thumbnailer uses (`MannequinUtility`). Scaling the blocky body instead gives a taller, wider shape with different attachments.
+
+**Meshes:**
+- Classic R15 body parts carry their real meshes, read with `CreateEditableMeshAsync` and scaled to the part.
+- The Rthro mannequin's meshes are Roblox-owned and can't be read, so each part gets the blocky R15 mesh of the same name fitted to its real size, with `"approximate": true`.
 - The R15 **Head** is the default Dynamic Head (a MeshPart). Studio won't read Roblox-owned meshes ("no permission to load asset"), so `mesh` is a stand-in: Studio's classic head mesh (`rbxasset://avatar/heads/head.mesh`) stretched to the head's real `size`, with `"approximate": true`. Its HatAttachment, HairAttachment and the rest come from the real Dynamic Head.
 - R6 parts carry Studio's classic body meshes (`rbxasset://avatar/meshes/torso.mesh`, `leftarm.mesh` and so on) fitted to each part's size, and the head is the classic head mesh at its rendered size.
 - `approximate` is left out when the mesh is the part's own.
