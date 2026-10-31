@@ -1,0 +1,16 @@
+schema_version = "1.0.0"
+
+id = "fitbridge"
+version = "0.1.0"
+name = "FitBridge"
+tagline = "Fit Roblox UGC accessories on R15 and send them to Studio"
+maintainer = "luxphantasia"
+type = "add-on"
+tags = ["Import-Export", "Object"]
+
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+network = "Local bridge on 127.0.0.1 for the FitBridge Studio plugin"
+files = "Caches synced rules and rigs, writes sent textures as PNG"
