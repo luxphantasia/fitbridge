@@ -155,6 +155,33 @@ if not all(p.use_smooth for p in me.polygons) or len(me.vertices) != 8:
     fail("rig parts are welded and shaded smooth")
 if sum(e.use_edge_sharp for e in me.edges) != 12:          # 12 box corners sharp; face diagonals smooth
     fail(f"a box's 90 degree corners stay sharp: {sum(e.use_edge_sharp for e in me.edges)}")
+# weighted normals like Roblox's parts: on a bevelled block, the big faces shade perfectly flat
+mods = [m for m in heads[0].modifiers if m.type == "WEIGHTED_NORMAL"]
+if len(mods) != 1 or mods[0].mode != "FACE_AREA" or not mods[0].keep_sharp:
+    fail("rig parts should carry a face-area Weighted Normal modifier")
+bm = bmesh.new()
+bmesh.ops.create_cube(bm, size=2.0)
+bmesh.ops.bevel(bm, geom=list(bm.edges), offset=0.1, segments=1, affect="EDGES")
+bmesh.ops.triangulate(bm, faces=bm.faces)
+BV = np.array([v.co[:] for v in bm.verts])
+BT = np.array([[v.index for v in f.verts] for f in bm.faces])
+bm.free()
+tmp = bpy.data.collections.new("tmp")
+ctx.scene.collection.children.link(tmp)
+from fitbridge import rig as rigmod  # noqa: E402
+bev = rigmod._part_object(tmp, "Bevel", BV, BT)
+ev = bev.evaluated_get(ctx.evaluated_depsgraph_get()).to_mesh()
+cn = np.empty(len(ev.loops) * 3)
+ev.corner_normals.foreach_get("vector", cn)
+cn = cn.reshape(-1, 3)
+top = [li for p in ev.polygons if p.normal.z > 0.999 for li in p.loop_indices]
+flat = np.abs(cn[top] - [0, 0, 1]).max()
+bev.evaluated_get(ctx.evaluated_depsgraph_get()).to_mesh_clear()
+for o in list(tmp.objects):
+    bpy.data.objects.remove(o)
+bpy.data.collections.remove(tmp)
+if flat > 1e-3:
+    fail(f"weighted normals should keep a bevelled block's big faces flat (off by {flat})")
 # R15 / R6 is one toggle: the R6 replaces the R15 in the same place, clicking the shown one hides it
 r15box = [v.co.copy() for o in bpy.data.collections["FitBridge R15"].objects for v in o.data.vertices]
 bpy.ops.fitbridge.show_rig(kind="R6")

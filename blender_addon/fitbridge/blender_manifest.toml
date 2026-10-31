@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "fitbridge"
-version = "0.4.1"
+version = "0.4.2"
 name = "FitBridge"
 tagline = "Fit Roblox UGC accessories on R15 and send them to Studio"
 maintainer = "luxphantasia"
