@@ -43,7 +43,7 @@ def _clear(name):
     bpy.data.collections.remove(coll)
 
 
-def _smooth(me):
+def _smooth(me, sharp=True):
     """shade like Roblox Studio: weld the seams Studio's meshes are split along, then smooth everything except edges
     sharper than SMOOTH_ANGLE"""
     import bmesh
@@ -53,8 +53,9 @@ def _smooth(me):
     bm.to_mesh(me)
     bm.free()
     try:
-        me.shade_smooth()
-        me.set_sharp_from_angle(angle=SMOOTH_ANGLE)
+        me.shade_smooth()                                     # also clears every sharp edge
+        if sharp:
+            me.set_sharp_from_angle(angle=SMOOTH_ANGLE)
     except AttributeError:                                    # Blender before 4.1
         for poly in me.polygons:
             poly.use_smooth = True
@@ -69,10 +70,10 @@ def _collection(context, name):
 SMOOTH_ANGLE = math.radians(60)    # Studio-like shading: soft across bevels, hard on real corners (+ weighted normals)
 
 
-def _part_object(coll, name, V, T):
+def _part_object(coll, name, V, T, sharp=True):
     me = bpy.data.meshes.new(name)
     me.from_pydata(np.asarray(V, float).tolist(), [], np.asarray(T, np.int64).reshape(-1, 3).tolist())
-    _smooth(me)
+    _smooth(me, sharp)
     me.validate()
     me.update()
     me.materials.append(_material())
@@ -115,7 +116,7 @@ def spawn_r15(context, scale):
     coll = _collection(context, R15_COLL)
     coll["fitbridge_scale"] = scale
     coll["fitbridge_source"] = _source(data, scale)
-    _build_parts(coll, data["parts"])
+    _build_parts(coll, data["parts"], sharp=False)            # R15: no sharp edges, weighted normals only (Lux)
     return coll
 
 
@@ -126,13 +127,13 @@ def _source(data, key):
     return "outdated" if spec.rig_outdated(key) else "studio"
 
 
-def _build_parts(coll, parts):
+def _build_parts(coll, parts, sharp=True):
     for p in parts:
         V, T = geom.part_mesh(p)
         V = _inset(V, _inset_for(p["name"]))
         C = geom.cframe_to_matrix(p["cframe"])
         Vw = (V @ C[:3, :3].T + C[:3, 3]) @ geom.P.T
-        _part_object(coll, p["name"], Vw, T)
+        _part_object(coll, p["name"], Vw, T, sharp)
 
 
 def _inset(V, amount):
