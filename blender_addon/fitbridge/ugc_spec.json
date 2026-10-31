@@ -1,0 +1,175 @@
+{
+  "spec_version": 1,
+  "updated": "2026-10-30",
+  "sources": {
+    "docs": "https://create.roblox.com/docs/art/accessories/specifications",
+    "thumbnails": "https://create.roblox.com/docs/marketplace/custom-thumbnails",
+    "live_rules": "AvatarCreationService:GetValidationRules() inside Studio. When the Studio plugin has synced live rules, they override `limits` and `accessory_types[*].attachments[*].bounds` below."
+  },
+
+  "units": "studs. All positions, sizes and CFrames are in Roblox space: Y up, -Z is the character's forward, +X is the character's right.",
+
+  "limits": {
+    "max_triangles": 4000,
+    "max_texture_size": 2048,
+    "editable_image_max_size": 1024,
+    "mesh_center_tolerance": 0.01
+  },
+
+  "checks": {
+    "bounds":            { "severity": "block", "why": "Roblox: every vertex must sit inside the attachment's box." },
+    "triangles":         { "severity": "block", "why": "Roblox: rigid accessories max 4k triangles." },
+    "texture_size":      { "severity": "block", "why": "Roblox: Marketplace textures max 2048x2048." },
+    "single_mesh":       { "severity": "block", "why": "Roblox: must be a single mesh." },
+    "single_material":   { "severity": "block", "why": "One material slot so one texture set maps cleanly." },
+    "uv_in_range":       { "severity": "block", "why": "House rule (your choice), not a Roblox rule: UVs inside 0-1." },
+    "texture_pow2":      { "severity": "block", "why": "House rule (your choice), not a Roblox rule: power-of-two sizes." },
+    "watertight":        { "severity": "warn",  "why": "Roblox lists it, but some meshes are open on purpose. Heads-up only." },
+    "floating":          { "severity": "warn",  "why": "Marketplace policy: must not look floating. Warn if the gap to the body is more than `floating_gap`." },
+    "floating_gap": 0.2
+  },
+
+  "body_scales": {
+    "Classic": { "label": "Classic (default blocky)", "humanoid_description": { "BodyTypeScale": 0.0, "ProportionScale": 0.0 } },
+    "Normal":  { "label": "Normal (Rthro)",           "humanoid_description": { "BodyTypeScale": 1.0, "ProportionScale": 0.0 } },
+    "Slender": { "label": "Slender (Rthro Narrow)",   "humanoid_description": { "BodyTypeScale": 1.0, "ProportionScale": 1.0 } }
+  },
+
+  "accessory_types": {
+    "Hat": {
+      "asset_type": "Hat", "accessory_type": "Hat", "rig_part": "Head",
+      "attachments": {
+        "HatAttachment": { "label": "Top of head", "bounds": {
+          "Classic": { "size": [3, 4, 3],          "offset": [0, 0, 0] },
+          "Normal":  { "size": [1.87, 2.5, 1.87],  "offset": [0, 0, 0] },
+          "Slender": { "size": [1.78, 2.5, 1.78],  "offset": [0, 0, 0] } } }
+      }
+    },
+    "Hair": {
+      "asset_type": "HairAccessory", "accessory_type": "Hair", "rig_part": "Head",
+      "attachments": {
+        "HairAttachment": { "label": "Hair", "bounds": {
+          "Classic": { "size": [3, 5, 3.5],        "offset": [0, -0.5, 0.25] },
+          "Normal":  { "size": [1.87, 3.12, 2.18], "offset": [0, -0.3125, 0.15625] },
+          "Slender": { "size": [1.78, 3.12, 2.08], "offset": [0, -0.3125, 0.1485], "note": "Docs say 1.892 front, which can't add up to 2.08; 0.892 assumed." } } }
+      }
+    },
+    "Face": {
+      "asset_type": "FaceAccessory", "accessory_type": "Face", "rig_part": "Head",
+      "attachments": {
+        "FaceFrontAttachment":  { "label": "Front of face", "bounds": {
+          "Classic": { "size": [3, 2, 2],          "offset": [0, 0, 0] },
+          "Normal":  { "size": [1.87, 1.25, 1.25], "offset": [0, 0, 0] },
+          "Slender": { "size": [1.78, 1.25, 1.18], "offset": [0, 0, 0] } } },
+        "FaceCenterAttachment": { "label": "Center of face", "bounds": "same_as:FaceFrontAttachment" }
+      }
+    },
+    "Eyebrow": {
+      "asset_type": "EyebrowAccessory", "rigid_allowed": false, "note": "Live rules (Oct 2026): RigidAllowed false; these must be layered (makeup/cage) assets.", "accessory_type": "Eyebrow", "rig_part": "Head",
+      "attachments": {
+        "FaceFrontAttachment":  { "label": "Front of face", "bounds": {
+          "Classic": { "size": [1.5, 0.5, 0.5], "offset": [0, 0, 0] },
+          "Normal":  { "size": [1.5, 0.5, 0.5], "offset": [0, 0, 0] },
+          "Slender": { "size": [1.5, 0.5, 0.5], "offset": [0, 0, 0] } } },
+        "FaceCenterAttachment": { "label": "Center of face", "bounds": "same_as:FaceFrontAttachment" }
+      }
+    },
+    "Eyelash": {
+      "asset_type": "EyelashAccessory", "rigid_allowed": false, "note": "Live rules (Oct 2026): RigidAllowed false; these must be layered (makeup/cage) assets.", "accessory_type": "Eyelash", "rig_part": "Head",
+      "attachments": {
+        "FaceFrontAttachment":  { "label": "Front of face", "bounds": {
+          "Classic": { "size": [1.5, 0.5, 0.5], "offset": [0, 0, 0] },
+          "Normal":  { "size": [1.5, 0.5, 0.5], "offset": [0, 0, 0] },
+          "Slender": { "size": [1.5, 0.5, 0.5], "offset": [0, 0, 0] } } },
+        "FaceCenterAttachment": { "label": "Center of face", "bounds": "same_as:FaceFrontAttachment" }
+      }
+    },
+    "Neck": {
+      "asset_type": "NeckAccessory", "accessory_type": "Neck", "rig_part": "UpperTorso",
+      "attachments": {
+        "NeckAttachment": { "label": "Neck", "bounds": {
+          "Classic": { "size": [3, 3, 2],          "offset": [0, 0, 0] },
+          "Normal":  { "size": [2.95, 3.68, 2.16], "offset": [0, 0, 0] },
+          "Slender": { "size": [2.59, 3.39, 1.92], "offset": [0, 0, 0] } } }
+      }
+    },
+    "Shoulder": {
+      "asset_type": "ShoulderAccessory", "accessory_type": "Shoulder",
+      "attachments": {
+        "NeckAttachment": { "label": "Across both shoulders (neck)", "rig_part": "UpperTorso", "bounds": {
+          "Classic": { "size": [7, 3, 3],          "offset": [0, 0, 0] },
+          "Normal":  { "size": [6.90, 3.68, 3.24], "offset": [0, 0, 0] },
+          "Slender": { "size": [6.05, 3.39, 2.88], "offset": [0, 0, 0] } } },
+        "LeftCollarAttachment":  { "label": "Left collar (stays still)",  "rig_part": "UpperTorso", "bounds": {
+          "Classic": { "size": [3, 3, 3],          "offset": [0, 0, 0] },
+          "Normal":  { "size": [2.95, 3.68, 3.24], "offset": [0, 0, 0] },
+          "Slender": { "size": [2.59, 3.39, 2.88], "offset": [0, 0, 0] } } },
+        "RightCollarAttachment": { "label": "Right collar (stays still)", "rig_part": "UpperTorso", "bounds": "same_as:LeftCollarAttachment" },
+        "LeftShoulderAttachment":  { "label": "Left shoulder (moves with arm)",  "rig_part": "LeftUpperArm", "bounds": {
+          "Classic": { "size": [3, 3, 3],          "offset": [0, 0, 0] },
+          "Normal":  { "size": [2.67, 4.40, 3.09], "offset": [0, 0, 0] },
+          "Slender": { "size": [2.37, 3.96, 2.75], "offset": [0, 0, 0] } } },
+        "RightShoulderAttachment": { "label": "Right shoulder (moves with arm)", "rig_part": "RightUpperArm", "bounds": "same_as:LeftShoulderAttachment" }
+      }
+    },
+    "Front": {
+      "asset_type": "FrontAccessory", "accessory_type": "Front", "rig_part": "UpperTorso",
+      "attachments": {
+        "BodyFrontAttachment": { "label": "Chest", "bounds": {
+          "Classic": { "size": [3, 3, 3],          "offset": [0, 0, 0] },
+          "Normal":  { "size": [2.95, 3.68, 3.24], "offset": [0, 0, 0] },
+          "Slender": { "size": [2.59, 3.39, 2.88], "offset": [0, 0, 0] } } }
+      }
+    },
+    "Back": {
+      "asset_type": "BackAccessory", "accessory_type": "Back", "rig_part": "UpperTorso",
+      "attachments": {
+        "BodyBackAttachment": { "label": "Back", "bounds": {
+          "Classic": { "size": [10, 7, 4.5],       "offset": [0, 0, 0.75] },
+          "Normal":  { "size": [9.86, 8.59, 4.87], "offset": [0, 0, 0.8115] },
+          "Slender": { "size": [8.64, 7.91, 4.32], "offset": [0, 0, 0.7215] } } }
+      }
+    },
+    "Waist": {
+      "asset_type": "WaistAccessory", "accessory_type": "Waist", "rig_part": "LowerTorso",
+      "attachments": {
+        "WaistFrontAttachment":  { "label": "Front of waist", "bounds": {
+          "Classic": { "size": [4, 3.5, 7],        "offset": [0, -0.25, 0] },
+          "Normal":  { "size": [3.94, 4.29, 7.57], "offset": [0, -0.3075, 0] },
+          "Slender": { "size": [3.76, 3.29, 6.73], "offset": [0, -0.2355, 0] } } },
+        "WaistCenterAttachment": { "label": "Center of waist", "bounds": "same_as:WaistFrontAttachment" },
+        "WaistBackAttachment":   { "label": "Back of waist",   "bounds": "same_as:WaistFrontAttachment" }
+      }
+    }
+  },
+
+  "thumbnail": {
+    "field_of_view": 70,
+    "fov_axis": "vertical",
+    "aspect": 1.0,
+    "render_size": 420,
+    "stored_as": "Accessory/ThumbnailConfiguration (Configuration) with ThumbnailCameraTarget (ObjectValue = Handle) and ThumbnailCameraValue (CFrameValue = camera CFrame relative to Handle.CFrame).",
+    "default_camera": "Camera 6 studs in front of the Handle (-Z) looking at its centre.",
+    "caveat": "Roblox re-frames at render time from the Handle size, so the final Marketplace shot can be a little closer than the saved camera. Angle is exact; zoom is an estimate."
+  },
+
+  "marketplace_properties": {
+    "Material": "Plastic",
+    "Transparency": 0,
+    "VertexColor": [1, 1, 1],
+    "allowed_handle_children": ["Attachment", "SurfaceAppearance", "WrapLayer"],
+    "allowed_accessory_children": ["Handle", "ThumbnailConfiguration"]
+  },
+
+  "r6_preview": {
+    "note": "Preview only. Roblox fits and validates rigid accessories against R15.",
+    "parts": {
+      "Head":     { "size": [2, 1, 1], "cframe": [0, 4.5, 0] },
+      "Torso":    { "size": [2, 2, 1], "cframe": [0, 3, 0] },
+      "Left Arm": { "size": [1, 2, 1], "cframe": [-1.5, 3, 0] },
+      "Right Arm":{ "size": [1, 2, 1], "cframe": [1.5, 3, 0] },
+      "Left Leg": { "size": [1, 2, 1], "cframe": [-0.5, 1, 0] },
+      "Right Leg":{ "size": [1, 2, 1], "cframe": [0.5, 1, 0] }
+    }
+  }
+}

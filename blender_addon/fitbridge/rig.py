@@ -1,0 +1,169 @@
+# Scene helpers: the R15 mannequin (from the synced rig or the box stand-in), the R6 preview dummy, and the
+# thumbnail camera (70 deg vertical FOV, square 420 render, mannequin hidden).
+
+import json
+import math
+
+import bpy
+import numpy as np
+
+from . import geom, spec
+
+R15_COLL = "FitBridge R15"
+R6_COLL = "FitBridge R6 preview"
+R6_SIDE = 4.0                  # the R6 preview stands 4 studs to the character's right (Roblox +X), beside the R15
+INSET = 0.004                  # boxes shrink this much (display only) so touching faces don't z-fight
+CAM_NAME = "FitBridge Thumbnail"
+
+
+def _material():
+    mat = bpy.data.materials.get("FitBridge Mannequin")
+    if mat is None:
+        mat = bpy.data.materials.new("FitBridge Mannequin")
+        mat.diffuse_color = (0.55, 0.57, 0.6, 1.0)
+    return mat
+
+
+def _clear(name):
+    coll = bpy.data.collections.get(name)
+    if coll is None:
+        return
+    for ob in list(coll.objects):
+        me = ob.data
+        bpy.data.objects.remove(ob)
+        if me is not None and me.users == 0:
+            bpy.data.meshes.remove(me)
+    bpy.data.collections.remove(coll)
+
+
+def _collection(context, name):
+    coll = bpy.data.collections.new(name)
+    context.scene.collection.children.link(coll)
+    return coll
+
+
+def _part_object(coll, name, V, T):
+    me = bpy.data.meshes.new(name)
+    me.from_pydata(np.asarray(V, float).tolist(), [], np.asarray(T, np.int64).reshape(-1, 3).tolist())
+    me.validate()
+    me.update()
+    me.materials.append(_material())
+    ob = bpy.data.objects.new(name, me)
+    ob["fitbridge_rig"] = True
+    ob.hide_select = True
+    coll.objects.link(ob)
+    return ob
+
+
+def spawn_r15(context, scale):
+    """the mannequin for a body scale; parts are built in place (Roblox world -> Blender world), unselectable"""
+    _clear(R15_COLL)
+    data = spec.rig(scale)
+    coll = _collection(context, R15_COLL)
+    coll["fitbridge_scale"] = scale
+    coll["fitbridge_source"] = "standin" if data.get("standin") else "studio"
+    for p in data["parts"]:
+        V, T = geom.part_mesh(p)
+        if not (p.get("mesh") or {}).get("positions"):
+            V = _inset(V)
+        C = geom.cframe_to_matrix(p["cframe"])
+        Vw = (V @ C[:3, :3].T + C[:3, 3]) @ geom.P.T
+        _part_object(coll, p["name"], Vw, T)
+    return coll
+
+
+def _inset(V):
+    """pull a generated part in by INSET on every side, so coplanar faces of touching parts don't flicker"""
+    c = (V.max(axis=0) + V.min(axis=0)) / 2
+    half = np.maximum((V.max(axis=0) - V.min(axis=0)) / 2, 1e-9)
+    return c + (V - c) * np.maximum(half - INSET, half * 0.5) / half
+
+
+def spawned_r15():
+    coll = bpy.data.collections.get(R15_COLL)
+    if coll is None:
+        return None, None
+    return coll.get("fitbridge_scale"), coll.get("fitbridge_source")
+
+
+def spawn_r6(context):
+    _clear(R6_COLL)
+    coll = _collection(context, R6_COLL)
+    for name, p in spec.SPEC["r6_preview"]["parts"].items():
+        V, T = geom.box_mesh(p["size"])
+        Vw = (_inset(V) + np.asarray(p["cframe"][:3], float) + (R6_SIDE, 0, 0)) @ geom.P.T
+        _part_object(coll, name, Vw, T)
+    return coll
+
+
+# ------------------------------------------------------------------------------------------------------- thumbnail
+
+def _mat(m):
+    from mathutils import Matrix
+    return Matrix(np.asarray(m, float).tolist())
+
+
+def thumbnail_on(context, res):
+    sc = context.scene
+    st = sc.fitbridge
+    cam = st.thumb_camera
+    if cam is None:
+        data = bpy.data.cameras.new(CAM_NAME)
+        cam = bpy.data.objects.new(CAM_NAME, data)
+        sc.collection.objects.link(cam)
+        st.thumb_camera = cam
+        if res and res.get("fit") is not None:
+            cam.matrix_world = _mat(geom.swap(_default(res)))
+    cam.data.sensor_fit = "VERTICAL"
+    cam.data.angle_y = math.radians(spec.SPEC["thumbnail"]["field_of_view"])
+    cam.data.clip_start = 0.05
+    r = sc.render
+    st.thumb_saved = json.dumps({"x": r.resolution_x, "y": r.resolution_y, "pct": r.resolution_percentage,
+                                 "camera": sc.camera.name if sc.camera else ""})
+    n = spec.SPEC["thumbnail"]["render_size"]
+    r.resolution_x = r.resolution_y = n
+    r.resolution_percentage = 100
+    sc.camera = cam
+    _hide_rigs(True)
+    for area in context.screen.areas if context.screen else []:
+        if area.type == "VIEW_3D":
+            area.spaces.active.region_3d.view_perspective = "CAMERA"
+    return cam
+
+
+def _default(res):
+    from .evaluate import default_camera
+    return default_camera(res)
+
+
+def reset_camera(context, res):
+    cam = context.scene.fitbridge.thumb_camera
+    if cam is not None and res and res.get("fit") is not None:
+        cam.matrix_world = _mat(geom.swap(_default(res)))
+
+
+def thumbnail_off(context):
+    sc = context.scene
+    st = sc.fitbridge
+    try:
+        saved = json.loads(st.thumb_saved or "{}")
+    except ValueError:
+        saved = {}
+    r = sc.render
+    if saved:
+        r.resolution_x, r.resolution_y, r.resolution_percentage = saved["x"], saved["y"], saved["pct"]
+        if saved.get("camera") and saved["camera"] in bpy.data.objects:
+            sc.camera = bpy.data.objects[saved["camera"]]
+    st.thumb_saved = ""
+    _hide_rigs(False)
+    for area in context.screen.areas if context.screen else []:
+        if area.type == "VIEW_3D" and area.spaces.active.region_3d.view_perspective == "CAMERA":
+            area.spaces.active.region_3d.view_perspective = "PERSP"
+
+
+def _hide_rigs(hide):
+    for name in (R15_COLL, R6_COLL):
+        coll = bpy.data.collections.get(name)
+        if coll is not None:
+            coll.hide_viewport = hide
+            coll.hide_render = hide
