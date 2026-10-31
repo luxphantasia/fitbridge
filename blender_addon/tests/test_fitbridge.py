@@ -153,8 +153,8 @@ heads = [o for o in bpy.data.collections["FitBridge R15"].objects if o.name.star
 me = heads[0].data
 if not all(p.use_smooth for p in me.polygons) or len(me.vertices) != 8:
     fail("rig parts are welded and shaded smooth")
-if sum(e.use_edge_sharp for e in me.edges) != 12:          # 12 box corners sharp; face diagonals smooth
-    fail(f"a box's 90 degree corners stay sharp: {sum(e.use_edge_sharp for e in me.edges)}")
+if any(e.use_edge_sharp for o in bpy.data.collections["FitBridge R15"].objects for e in o.data.edges):
+    fail("the R15 should have no sharp edges at all")
 # weighted normals like Roblox's parts: on a bevelled block, the big faces shade perfectly flat
 mods = [m for m in heads[0].modifiers if m.type == "WEIGHTED_NORMAL"]
 if len(mods) != 1 or mods[0].mode != "FACE_AREA" or not mods[0].keep_sharp:
@@ -182,6 +182,13 @@ for o in list(tmp.objects):
 bpy.data.collections.remove(tmp)
 if flat > 1e-3:
     fail(f"weighted normals should keep a bevelled block's big faces flat (off by {flat})")
+# the R6 keeps its sharp corners (only the R15 drops them)
+bpy.ops.fitbridge.show_rig(kind="R6")
+r6t = bpy.data.collections["FitBridge R6 preview"].objects["Torso"].data
+if sum(e.use_edge_sharp for e in r6t.edges) != 12:
+    fail("the R6 box torso keeps its 12 sharp corners")
+bpy.ops.fitbridge.show_rig(kind="R15")
+heads = [o for o in bpy.data.collections["FitBridge R15"].objects if o.name.startswith("UpperTorso")]
 # R15 / R6 is one toggle: the R6 replaces the R15 in the same place, clicking the shown one hides it
 r15box = [v.co.copy() for o in bpy.data.collections["FitBridge R15"].objects for v in o.data.vertices]
 bpy.ops.fitbridge.show_rig(kind="R6")
