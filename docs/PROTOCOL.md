@@ -142,7 +142,11 @@ Studio builds a real R15 avatar for one body scale (`Players:CreateHumanoidModel
                "mesh": { "positions": [..], "triangles": [..] } | null } ],
   "attachments": [ { "name": "HatAttachment", "part": "Head", "world_cframe": [12 numbers] } ] }
 ```
-`mesh` is null when Studio can't read the part's mesh. Blender then draws that part as a box of `size`. The rig is posed exactly as Roblox would wear it, so the body attachments are exact. No Roblox mesh files ship inside the addon.
+The rig stands on the ground: its lowest point is at y = 0, it's centred on x/z = 0 and it faces -Z, like the R6 preview.
+
+`mesh` is null when Studio can't read the part's mesh. Then `shape` may say what to draw instead:
+- `{ "kind": "classic_head", "scale": [x, y, z] }`: the default R15 head is a Part with a SpecialMesh of type Head (the classic rounded head), which has no mesh file. Draw a vertical cylinder with rounded top and bottom edges, of size `size × scale` (Roblox renders it roughly 1.2 × 1.2 × 1.2 on a 1-stud part; matching the silhouette is enough, because nothing is validated against it).
+- No `shape`: draw a box of `size`. The rig is posed exactly as Roblox would wear it, so the body attachments are exact. No Roblox mesh files ship inside the addon.
 
 ## Uploading through Open Cloud (v1.1)
 
