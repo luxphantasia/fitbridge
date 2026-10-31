@@ -348,6 +348,7 @@ def build_package(context, res, revision, override):
     mesh_sha = hashlib.sha256(json.dumps(mesh).encode()).hexdigest()
     blobs = {}
     textures = {}
+    pixels = {}
     tdir = spec.cache_dir() / "textures"
     tdir.mkdir(exist_ok=True)
     for k, img in res["textures"].items():
@@ -355,6 +356,7 @@ def build_package(context, res, revision, override):
             textures[k] = None
             continue
         rgba = image_rgba8(img)
+        pixels[k] = rgba
         sha = hashlib.sha256(rgba.tobytes()).hexdigest()
         png = tdir / f"{k}.png"
         write_png(png, rgba)
@@ -386,9 +388,9 @@ def build_package(context, res, revision, override):
         "sendable": bool(sendable), "override": bool(override),
         "spec_source": spec.spec_source(),
     }
-    blobs["/v1/package"] = manifest
     blobs["/v1/package/mesh"] = {"protocol": 1, "revision": revision, "sha256": mesh_sha, **mesh}
-    return {k: json.dumps(v).encode() for k, v in blobs.items()}, manifest
+    # the manifest itself is served as a dict: its upload block changes while the upload runs
+    return {k: json.dumps(v).encode() for k, v in blobs.items()}, manifest, mesh, pixels
 
 
 def SPEC_TYPE(acc_type):

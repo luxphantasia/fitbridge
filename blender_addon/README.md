@@ -16,3 +16,8 @@ frame the thumbnail, then press **Send to Studio**. The contract is `../docs/PRO
 | `server.py` | The `http.server` thread on 127.0.0.1:47231. It only serves snapshots and queues POSTs; no bpy |
 | `rig.py` | Spawns R15 / R6 preview, and the thumbnail camera (70° vertical FOV, 420 square) |
 | `draw.py` | Ghost bounds box (GPU overlay, green or red) and the "Top (Y): 0.14 studs over" readout |
+| `upload.py` | Open Cloud upload (PROTOCOL v1.1): a tiny `.glb` writer from the wire arrays, then a multipart POST + operation poll on a worker thread, cached by mesh + texture hashes |
+
+The Open Cloud key, creator type and creator id go in the addon preferences. The key is only ever sent to
+apis.roblox.com in the `x-api-key` header: never over the bridge, in a manifest or in a log. The tests use a local
+fake Open Cloud and never reach the real API.

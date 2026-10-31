@@ -11,9 +11,50 @@ import bmesh
 import bpy
 import numpy as np
 
+# a local fake of Roblox Open Cloud: nothing in these tests may reach the real API
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: E402
+import threading  # noqa: E402
+
+OC = {"posts": [], "polls": 0, "fail": False}
+
+
+class FakeOpenCloud(BaseHTTPRequestHandler):
+    def _json(self, code, body):
+        d = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(d)))
+        self.end_headers()
+        self.wfile.write(d)
+
+    def do_POST(self):
+        n = int(self.headers["Content-Length"])
+        OC["posts"].append({"path": self.path, "headers": dict(self.headers), "body": self.rfile.read(n)})
+        if OC["fail"]:
+            self._json(400, {"message": "Asset name is moderated"})
+        else:
+            self._json(200, {"path": "operations/op123abc", "operationId": "op123abc"})
+
+    def do_GET(self):
+        OC["polls"] += 1
+        OC.setdefault("poll_keys", []).append(self.headers.get("x-api-key"))
+        if OC["polls"] % 2:
+            self._json(200, {"path": "operations/op123abc", "done": False})
+        else:
+            self._json(200, {"path": "operations/op123abc", "done": True, "response": {"assetId": "777"}})
+
+    def log_message(self, *a):
+        pass
+
+
+_oc = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenCloud)
+threading.Thread(target=_oc.serve_forever, daemon=True).start()
+os.environ["FITBRIDGE_ROBLOX_API"] = f"http://127.0.0.1:{_oc.server_address[1]}"
+os.environ["FITBRIDGE_POLL_EVERY"] = "0.05"
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import fitbridge  # noqa: E402
-from fitbridge import evaluate, geom, server, spec  # noqa: E402
+from fitbridge import evaluate, geom, server, spec, upload  # noqa: E402
 
 PORT = int(os.environ["FITBRIDGE_PORT"])
 BASE = f"http://127.0.0.1:{PORT}"
@@ -228,13 +269,15 @@ if h["sent_revision"] != 1 or h["package_revision"] != 1:
     fail(f"sent revision: {h}")
 code, man = get("/v1/package")
 mock_keys = {"protocol", "revision", "name", "accessory_type", "attachment", "body_scale", "mesh", "textures", "pbr",
-             "thumbnail", "checks", "sendable", "override", "spec_source"}
+             "thumbnail", "checks", "sendable", "override", "spec_source", "upload"}
 if code != 200 or set(man) != mock_keys or set(man["mesh"]) != {"sha256", "triangles", "vertices", "size", "offset"}:
     fail(f"manifest keys {sorted(man)}")
 if man["accessory_type"] != "Hat" or man["attachment"] != "HatAttachment" or not man["pbr"] or not man["sendable"]:
     fail(f"manifest {man}")
 if set(man["textures"]) != {"color", "normal", "roughness", "metalness"} or man["textures"]["roughness"] is not None:
     fail(f"textures {man['textures']}")
+if man["upload"]["state"] != "off" or h["upload_state"] != "off" or h["upload_revision"] != 1:
+    fail(f"no key = upload off: {man['upload']} {h}")
 code, mesh = get("/v1/package/mesh")
 Pp = np.array(mesh["positions"]).reshape(-1, 3)
 T = np.array(mesh["triangles"]).reshape(-1, 3)
@@ -268,6 +311,94 @@ if not np.allclose(Cr[:3, 2], [0, 0, -1], atol=1e-4):         # camera looks dow
     fail(f"camera orientation {Cr[:3, :3]}")
 done.append("Send: manifest matches the mock's fields, mesh centred + split per corner + CCW, "
             "colour texture top row first + PNG, camera_cframe (0, 0, -6) relative to the Handle")
+
+# --- Open Cloud upload (fake server): glb, multipart, key only in the header, poll, cache, failure
+import struct  # noqa: E402
+import time  # noqa: E402
+blobs, manifest, wire, pixels = evaluate.build_package(ctx, evaluate.evaluate(ctx), 2, False)
+server.publish(blobs, manifest, 2)
+KEY = "test-key-not-real"
+upload.start(2, manifest, wire, pixels, KEY, "User", "123")
+for _ in range(200):
+    if upload.public()["state"] != "pending":
+        break
+    time.sleep(0.05)
+code, man2 = get("/v1/package")
+up = man2["upload"]
+if up["state"] != "done" or up["model_asset_id"] != 777 or up["creator"] != {"type": "User", "id": 123}:
+    fail(f"upload: {up}")
+h = get("/v1/hello")[1]
+if h["upload_state"] != "done" or h["upload_revision"] != 2:
+    fail(f"hello upload fields {h}")
+if len(OC["posts"]) != 1 or OC["posts"][0]["path"] != "/assets/v1/assets":
+    fail(f"one POST to /assets/v1/assets: {[p['path'] for p in OC['posts']]}")
+hd = {k.lower(): v for k, v in OC["posts"][0]["headers"].items()}
+if hd.get("x-api-key") != KEY or not hd.get("user-agent", "").startswith("FitBridge-Blender") or "@" in hd["user-agent"]:
+    fail("key goes in x-api-key only; neutral user agent")
+if set(OC["poll_keys"]) != {KEY}:
+    fail("polls must carry the key header")
+body = OC["posts"][0]["body"]
+req = json.loads(body.split(b"application/json\r\n\r\n", 1)[1].split(b"\r\n--", 1)[0])
+if req != {"assetType": "Model", "displayName": "Hat", "description": "Made with FitBridge",
+           "creationContext": {"creator": {"userId": "123"}}}:
+    fail(f"request json {req}")
+if KEY.encode() in body:
+    fail("the key must not be in the body")
+glb = body.split(b"model/gltf-binary\r\n\r\n", 1)[1].rsplit(b"\r\n--", 1)[0]
+magic, ver, total = struct.unpack("<III", glb[:12])
+jlen, jtype = struct.unpack("<II", glb[12:20])
+gl = json.loads(glb[20:20 + jlen])
+if magic != 0x46546C67 or ver != 2 or total != len(glb) or jtype != 0x4E4F534A:
+    fail("glb header")
+binstart = 20 + jlen + 8
+acc = gl["accessors"][gl["meshes"][0]["primitives"][0]["attributes"]["POSITION"]]
+bv = gl["bufferViews"][acc["bufferView"]]
+gpos = np.frombuffer(glb[binstart + bv["byteOffset"]:binstart + bv["byteOffset"] + bv["byteLength"]], np.float32).reshape(-1, 3)
+if not np.allclose(gpos, np.array(wire["positions"]).reshape(-1, 3), atol=1e-6):
+    fail("glb positions = wire positions, unchanged")
+acc = gl["accessors"][gl["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_0"]]
+bv = gl["bufferViews"][acc["bufferView"]]
+guv = np.frombuffer(glb[binstart + bv["byteOffset"]:binstart + bv["byteOffset"] + bv["byteLength"]], np.float32).reshape(-1, 2)
+wuv = np.array(wire["uvs"]).reshape(-1, 2)
+if not np.allclose(guv[:, 1], 1 - wuv[:, 1], atol=1e-6) or len(gl["images"]) != 2 or "normalTexture" not in gl["materials"][0]:
+    fail("glb uv flip / embedded colour + normal maps")
+import tempfile  # noqa: E402
+gpath = os.path.join(tempfile.mkdtemp(), "check.glb")
+open(gpath, "wb").write(glb)
+before = set(bpy.data.objects)
+bpy.ops.import_scene.gltf(filepath=gpath)                # an independent reader must accept it
+new = [o for o in bpy.data.objects if o not in before and o.type == "MESH"]
+if len(new) != 1 or len(new[0].data.polygons) != 12 or len(new[0].data.materials[0].node_tree.nodes) < 3:
+    fail(f"Blender's glTF importer should read the glb: {new}")
+for o in new:
+    bpy.data.objects.remove(o)
+ctx.view_layer.objects.active = hat
+for txt in (json.dumps(get("/v1/hello")[1]), json.dumps(man2), json.dumps(upload.public())):
+    if KEY in txt:
+        fail("the key leaked over the bridge")
+upload.start(3, manifest, wire, pixels, KEY, "User", "123")
+if upload.public()["state"] != "done" or "unchanged" not in upload.public()["message"] or len(OC["posts"]) != 1:
+    fail("unchanged mesh + textures must reuse the cached model")
+OC["fail"] = True
+upload.start(4, manifest, wire, pixels, KEY, "Group", "55")
+for _ in range(200):
+    if upload.public()["state"] != "pending":
+        break
+    time.sleep(0.05)
+up = upload.public()
+if up["state"] != "failed" or up["message"] != "Roblox said 400: Asset name is moderated" or KEY in up["message"]:
+    fail(f"failure message {up}")
+if json.loads(OC["posts"][-1]["body"].split(b"application/json\r\n\r\n", 1)[1].split(b"\r\n--", 1)[0])["creationContext"] != {"creator": {"groupId": "55"}}:
+    fail("group creator")
+upload.start(5, manifest, wire, pixels, KEY, "User", "")
+if upload.public()["state"] != "failed" or "creator id" not in upload.public()["message"]:
+    fail("missing creator id")
+upload.start(6, manifest, wire, pixels, "", "User", "123")
+if upload.public()["state"] != "off":
+    fail("no key = off")
+_oc.shutdown()
+done.append("Open Cloud (fake): glb straight from the wire arrays (V flipped, maps embedded), multipart request, "
+            "key only in x-api-key, poll -> model 777 in manifest + hello, cache reuse, Roblox error shown, no key = off")
 
 # --- Studio POSTs: rules, rig, result
 # shaped like real Studio output (Studio 0.744): keyed "Hat", Classic-column boxes, 1024 textures, Eyebrow not rigid

@@ -8,7 +8,7 @@ import time
 import bpy
 from bpy.props import BoolProperty, EnumProperty, IntProperty, PointerProperty, StringProperty
 
-from . import draw, evaluate, rig, server, spec
+from . import draw, evaluate, rig, server, spec, upload
 
 ICONS = {"pass": "CHECKMARK", "warn": "ERROR", "fail": "CANCEL"}
 _dirty = {"flag": True, "last": 0.0}
@@ -71,11 +71,25 @@ class FB_Prefs(bpy.types.AddonPreferences):
 
     port: IntProperty(name="Port", default=47231, min=1024, max=65535,
                       description="Must match the Studio plugin's setting")
+    api_key: StringProperty(name="Open Cloud API key", subtype="PASSWORD",
+                            description="Roblox Open Cloud key with Assets read + write. Stays on this computer: "
+                                        "only sent to apis.roblox.com, never over the bridge")
+    creator_type: EnumProperty(name="Creator", items=[("User", "User", ""), ("Group", "Group", "")])
+    creator_id: StringProperty(name="Creator id",
+                               description="The user or group that will submit the UGC item (Roblox checks that "
+                                           "it owns the mesh and textures)")
 
     def draw(self, context):
-        row = self.layout.row()
+        lay = self.layout
+        row = lay.row()
         row.prop(self, "port")
         row.operator("fitbridge.restart_server", text="Restart bridge")
+        box = lay.box()
+        box.label(text="Upload through Roblox Open Cloud", icon="URL")
+        box.prop(self, "api_key")
+        row = box.row()
+        row.prop(self, "creator_type", expand=True)
+        row.prop(self, "creator_id")
 
 
 def prefs():
@@ -149,8 +163,11 @@ class FB_OT_send(bpy.types.Operator):
             self.report({"ERROR"}, "Fix the failing checks first (or tick Override for testing)")
             return {"CANCELLED"}
         rev = max(st.revision, server.state["sent_revision"]) + 1
-        blobs, manifest = evaluate.build_package(context, res, rev, st.override)
-        server.publish(blobs, rev)
+        blobs, manifest, mesh, pixels = evaluate.build_package(context, res, rev, st.override)
+        server.publish(blobs, manifest, rev)
+        p = prefs()
+        upload.start(rev, manifest, mesh, pixels, p.api_key if p else "", p.creator_type if p else "User",
+                     p.creator_id if p else "")
         st.revision = rev
         _status["last_sent"] = time.time()
         _status["message"] = f"Sent {manifest['name']} (revision {rev})"
@@ -230,6 +247,10 @@ class FB_PT_main(bpy.types.Panel):
         row.scale_y = 1.4
         row.operator("fitbridge.send", icon="EXPORT")
         box.prop(st, "override")
+        up = upload.public()
+        if server.state["sent_revision"]:
+            icon = {"done": "CHECKMARK", "failed": "ERROR", "pending": "SORTTIME", "off": "INFO"}[up["state"]]
+            box.label(text=up["message"], icon=icon)
         col = box.column(align=True)
         col.scale_y = 0.8
         col.label(text=server.status_text(), icon="LINKED" if server.studio_connected() else "UNLINKED")

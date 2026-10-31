@@ -7,6 +7,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import upload
+
 PROTOCOL = 1
 HOST = "127.0.0.1"
 STUDIO_TIMEOUT = 3.0           # seconds without a request before Studio counts as gone
@@ -15,10 +17,11 @@ STUDIO_SESSION_GAP = 15.0      # a gap this long means a new Studio session (ask
 lock = threading.Lock()
 inbox = queue.Queue()
 state = {
-    "hello": {"app": "FitBridge Blender", "app_version": "0.1.0", "blender_version": "?"},
+    "hello": {"app": "FitBridge Blender", "app_version": "0.2.0", "blender_version": "?"},
     "package_revision": 0,
     "sent_revision": 0,
-    "blobs": {},                # path -> JSON bytes (manifest, mesh, textures) of the last Send
+    "blobs": {},                # path -> JSON bytes (mesh, textures) of the last Send
+    "manifest": None,           # the last Send's manifest (dict; its upload block is filled in per request)
     "need_rules": True,
     "need_rigs": set(),
     "last_request": 0.0,
@@ -67,11 +70,18 @@ class Handler(BaseHTTPRequestHandler):
                 body = {"protocol": PROTOCOL, **state["hello"], "package_revision": state["package_revision"],
                         "sent_revision": state["sent_revision"]}
             body["needs"] = needs()
+            body.update(upload.hello_fields())
             self._send(200, body)
             return
+        if path == "/v1/package":
+            with lock:
+                manifest = state["manifest"]
+            if manifest is not None:
+                self._send(200, {**manifest, "upload": upload.public()})
+                return
         with lock:
             blob = state["blobs"].get(path)
-            sent = bool(state["blobs"])
+            sent = state["manifest"] is not None
         if blob is not None:
             self._send(200, blob)
         elif path.startswith("/v1/package/texture/"):
@@ -151,8 +161,9 @@ def status_text():
     return f"Bridge: listening on {HOST}:{_server['port']}"
 
 
-def publish(blobs, revision):
+def publish(blobs, manifest, revision):
     with lock:
         state["blobs"] = blobs
+        state["manifest"] = manifest
         state["package_revision"] = revision
         state["sent_revision"] = revision
