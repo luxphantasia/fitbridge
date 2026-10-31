@@ -11,6 +11,8 @@ HERE = Path(__file__).resolve().parent
 SPEC = json.loads((HERE / "ugc_spec.json").read_text())
 SCALES = list(SPEC["body_scales"])
 TYPES = list(SPEC["accessory_types"])
+# types Roblox lets you upload as rigid accessories (Eyebrow / Eyelash must be layered, so they're left out)
+RIGID_TYPES = [t for t in TYPES if SPEC["accessory_types"][t].get("rigid_allowed", True)]
 CHECK_IDS = [k for k, v in SPEC["checks"].items() if isinstance(v, dict)]
 
 _cache_dir = None
@@ -59,6 +61,17 @@ def live_rules():
         _rules["data"] = _read("rules.json")
         _rules["loaded"] = True
     return _rules["data"]
+
+
+def rigid_allowed(acc_type):
+    """live rules first (RigidAllowed), then the bundled spec"""
+    live = live_rules()
+    if live:
+        asset = SPEC["accessory_types"][acc_type]["asset_type"]
+        got = ((live.get("accessories") or {}).get(asset) or {}).get("rigid_allowed")
+        if got is not None:
+            return bool(got)
+    return SPEC["accessory_types"][acc_type].get("rigid_allowed", True)
 
 
 def attachments_for(acc_type):

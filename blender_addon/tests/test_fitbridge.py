@@ -270,24 +270,36 @@ done.append("Send: manifest matches the mock's fields, mesh centred + split per 
             "colour texture top row first + PNG, camera_cframe (0, 0, -6) relative to the Handle")
 
 # --- Studio POSTs: rules, rig, result
-nb = spec.bundled_bounds("Hat", "HatAttachment", "Normal")
-code, _ = post("/v1/rules", {"protocol": 1, "fetched": "2026-10-31T10:00:00Z", "limits": {"max_triangles": 10},
-                             "accessories": {"HatAccessory": {"rigid_allowed": True, "attachments": {
-                                 "HatAttachment": {"size": nb["size"], "offset": [0, 0, 0]}}}}, "raw": {"x": 1}})
+# shaped like real Studio output (Studio 0.744): keyed "Hat", Classic-column boxes, 1024 textures, Eyebrow not rigid
+cb = spec.bundled_bounds("Hat", "HatAttachment", "Classic")
+code, _ = post("/v1/rules", {"protocol": 1, "fetched": "2026-10-31T10:00:00Z",
+                             "limits": {"max_triangles": 10, "max_texture_size": 1024},
+                             "accessories": {"Hat": {"rigid_allowed": True, "attachments": {
+                                 "HatAttachment": {"size": cb["size"], "offset": [0, 0, 0]}}},
+                                 "EyebrowAccessory": {"rigid_allowed": False, "attachments": {}}}, "raw": {"x": 1}})
 if code != 200 or "rules" in get("/v1/hello")[1]["needs"]:
     fail("rules POST")
 fitbridge.process_inbox()
 res = evaluate.evaluate(ctx)
 by = {c["id"]: c for c in res["checks"]}
-if res["bounds_source"] != "live" or by["triangles"]["status"] != "fail" or spec.live_rules()["matched_scale"] != "Normal":
+if res["bounds_source"] != "live" or by["triangles"]["status"] != "fail" or spec.live_rules()["matched_scale"] != "Classic":
     fail(f"live rules should win: {res['bounds_source']} {by['triangles']} {spec.live_rules().get('matched_scale')}")
-if "live from Studio, 2026-10-31" not in spec.rules_text():
-    fail(spec.rules_text())
+big = image("big", 2048, 2048, (1, 1, 1, 1))
+tc.image = big
+res = evaluate.evaluate(ctx)
+if {c["id"]: c for c in res["checks"]}["texture_size"]["status"] != "fail":
+    fail("a 2048 texture must fail against the live 1024 limit")
+tc.image = bpy.data.images["col"]
+bpy.data.images.remove(big)
+if spec.rigid_allowed("Eyebrow") or "Eyebrow" in spec.RIGID_TYPES or not spec.rigid_allowed("Hat"):
+    fail("Eyebrow isn't rigid (spec + live), Hat is")
+if "Eyebrow" in [i.identifier for i in st.bl_rna.properties["acc_type"].enum_items]:
+    fail("Eyebrow shouldn't be offered")
 code, e = post("/v1/rules", {"protocol": 2})
 if code != 409 or "Update the other plugin" not in e["error"]:
     fail("protocol mismatch")
 server.state["protocol_mismatch"] = None
-done.append("live rules override limits + boxes, matched to the 'Normal' column; protocol mismatch -> 409")
+done.append("live rules (real Studio shape) override limits + boxes, matched to 'Classic', 1024 textures, rigid_allowed; protocol mismatch -> 409")
 
 head = {"name": "Head", "size": [1.2, 1.2, 1.2], "cframe": [0, 1.6, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
         "mesh": {"positions": [-0.6, -0.6, -0.6, 0.6, -0.6, -0.6, 0, 0.6, 0, 0, -0.6, 0.6], "triangles": [0, 1, 2, 0, 2, 3, 0, 3, 1, 1, 3, 2]}}

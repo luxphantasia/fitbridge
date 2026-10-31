@@ -37,7 +37,7 @@
 
   "accessory_types": {
     "Hat": {
-      "asset_type": "HatAccessory", "accessory_type": "Hat", "rig_part": "Head",
+      "asset_type": "Hat", "accessory_type": "Hat", "rig_part": "Head",
       "attachments": {
         "HatAttachment": { "label": "Top of head", "bounds": {
           "Classic": { "size": [3, 4, 3],          "offset": [0, 0, 0] },
@@ -65,7 +65,7 @@
       }
     },
     "Eyebrow": {
-      "asset_type": "EyebrowAccessory", "accessory_type": "Eyebrow", "rig_part": "Head",
+      "asset_type": "EyebrowAccessory", "rigid_allowed": false, "note": "Live rules (Oct 2026): RigidAllowed false; these must be layered (makeup/cage) assets.", "accessory_type": "Eyebrow", "rig_part": "Head",
       "attachments": {
         "FaceFrontAttachment":  { "label": "Front of face", "bounds": {
           "Classic": { "size": [1.5, 0.5, 0.5], "offset": [0, 0, 0] },
@@ -75,7 +75,7 @@
       }
     },
     "Eyelash": {
-      "asset_type": "EyelashAccessory", "accessory_type": "Eyelash", "rig_part": "Head",
+      "asset_type": "EyelashAccessory", "rigid_allowed": false, "note": "Live rules (Oct 2026): RigidAllowed false; these must be layered (makeup/cage) assets.", "accessory_type": "Eyelash", "rig_part": "Head",
       "attachments": {
         "FaceFrontAttachment":  { "label": "Front of face", "bounds": {
           "Classic": { "size": [1.5, 0.5, 0.5], "offset": [0, 0, 0] },

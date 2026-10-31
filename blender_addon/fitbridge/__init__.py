@@ -50,7 +50,7 @@ def _poll_mesh(self, ob):
 class FB_Settings(bpy.types.PropertyGroup):
     body_scale: EnumProperty(name="Body scale", items=[(s, s, spec.SPEC["body_scales"][s]["label"]) for s in spec.SCALES],
                              default="Normal", update=mark_dirty)
-    acc_type: EnumProperty(name="Type", items=[(t, t, "") for t in spec.TYPES], update=_type_changed)
+    acc_type: EnumProperty(name="Type", items=[(t, t, "") for t in spec.RIGID_TYPES], update=_type_changed)
     attachment: EnumProperty(name="Attachment", items=_attachment_items, update=mark_dirty)
     target: PointerProperty(name="Mesh", type=bpy.types.Object, poll=_poll_mesh, update=mark_dirty,
                             description="The accessory mesh (empty = the active object)")

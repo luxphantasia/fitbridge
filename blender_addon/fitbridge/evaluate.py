@@ -218,7 +218,9 @@ def evaluate(context):
     checks = res["checks"]
 
     # bounds (Roblox's own test)
-    if ntri == 0:
+    if not spec.rigid_allowed(acc_type):
+        checks.append(_check("bounds", "fail", f"Roblox doesn't allow rigid {acc_type} accessories (layered only)"))
+    elif ntri == 0:
         checks.append(_check("bounds", "fail", "The mesh has no faces"))
     elif A is None:
         checks.append(_check("bounds", "fail", f"The {scale} rig has no {att}"))
