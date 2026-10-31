@@ -203,14 +203,16 @@ local function makeRig(scaleName)
 	return rig
 end
 
-local function readPartMesh(part: MeshPart)
+local function readMesh(meshId: string, scale: Vector3)
+	if meshId == "" then
+		return nil
+	end
 	local ok, em = pcall(function()
-		return AssetService:CreateEditableMeshAsync(Content.fromUri(part.MeshId))
+		return AssetService:CreateEditableMeshAsync(Content.fromUri(meshId))
 	end)
 	if not ok or not em then
 		return nil
 	end
-	local scale = part.Size / part.MeshSize
 	local index, positions, triangles = {}, {}, {}
 	for i, vid in em:GetVertices() do
 		index[vid] = i - 1
@@ -228,21 +230,53 @@ local function readPartMesh(part: MeshPart)
 	return { positions = positions, triangles = triangles }
 end
 
+-- A body part's shape for Blender: its mesh (MeshPart or SpecialMesh file), else a shape hint.
+-- The default R15 head is a Part with a SpecialMesh of type Head (the classic rounded head), which has no
+-- mesh file to read, so Blender draws that shape itself from `shape = { kind = "classic_head", scale }`.
+local function partShape(part: BasePart)
+	if part:IsA("MeshPart") then
+		return readMesh(part.MeshId, part.Size / part.MeshSize), nil
+	end
+	local special = part:FindFirstChildOfClass("SpecialMesh")
+	if special then
+		if special.MeshType == Enum.MeshType.FileMesh then
+			return readMesh(special.MeshId, special.Scale), nil
+		elseif special.MeshType == Enum.MeshType.Head then
+			return nil, { kind = "classic_head", scale = arr(special.Scale) }
+		end
+	end
+	return nil, nil
+end
+
 local function sendRig(scaleName)
 	local ok, rig = pcall(makeRig, scaleName)
 	if not ok then
 		return false, "Couldn't build the R15 rig: " .. tostring(rig)
 	end
 	rig.Parent = workspace -- joints only resolve in the DataModel
+	-- Stand it on the ground (feet at y = 0) facing -Z, like the R6 preview, instead of centring the root on the origin.
 	rig:PivotTo(CFrame.new(0, 0, 0))
+	local lowest = math.huge
+	for _, d in rig:GetDescendants() do
+		if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
+			local cf, size = d.CFrame, d.Size
+			local halfY = math.abs(cf.RightVector.Y) * size.X / 2
+				+ math.abs(cf.UpVector.Y) * size.Y / 2
+				+ math.abs(cf.LookVector.Y) * size.Z / 2
+			lowest = math.min(lowest, cf.Position.Y - halfY)
+		end
+	end
+	rig:PivotTo(CFrame.new(0, -lowest, 0))
 	local parts, attachments = {}, {}
 	for _, d in rig:GetDescendants() do
 		if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
+			local mesh, shape = partShape(d)
 			table.insert(parts, {
 				name = d.Name,
 				size = arr(d.Size),
 				cframe = cframeArr(d.CFrame),
-				mesh = if d:IsA("MeshPart") then readPartMesh(d) else nil,
+				mesh = mesh,
+				shape = shape,
 			})
 		elseif d:IsA("Attachment") and not string.find(d.Name, "RigAttachment") then
 			table.insert(attachments, { name = d.Name, part = d.Parent.Name, world_cframe = cframeArr(d.WorldCFrame) })
