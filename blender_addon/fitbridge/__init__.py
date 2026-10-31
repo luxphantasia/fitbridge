@@ -31,6 +31,15 @@ def _attachment_items(self, context):
     return _att_items[t]
 
 
+def _scale_changed(self, context):
+    if rig.shown() == "R15":                                 # the R15 follows the body scale
+        if spec.cached_rig(self.body_scale) is None:
+            with server.lock:
+                server.state["need_rigs"].add(self.body_scale)
+        rig.spawn_r15(context, self.body_scale)
+    mark_dirty()
+
+
 def _type_changed(self, context):
     self.attachment = spec.attachments_for(self.acc_type)[0][0]
     mark_dirty()
@@ -49,7 +58,7 @@ def _poll_mesh(self, ob):
 
 class FB_Settings(bpy.types.PropertyGroup):
     body_scale: EnumProperty(name="Body scale", items=[(s, s, spec.SPEC["body_scales"][s]["label"]) for s in spec.SCALES],
-                             default="Normal", update=mark_dirty)
+                             default="Normal", update=_scale_changed)
     acc_type: EnumProperty(name="Type", items=[(t, t, "") for t in spec.RIGID_TYPES], update=_type_changed)
     attachment: EnumProperty(name="Attachment", items=_attachment_items, update=mark_dirty)
     target: PointerProperty(name="Mesh", type=bpy.types.Object, poll=_poll_mesh, update=mark_dirty,
@@ -113,6 +122,32 @@ class FB_OT_spawn_r15(bpy.types.Operator):
                 server.state["need_rigs"].add(scale)
             self.report({"WARNING"}, "Open Studio with the FitBridge plugin to fetch the rig. Showing a box rig.")
         rig.spawn_r15(context, scale)
+        mark_dirty()
+        return {"FINISHED"}
+
+
+class FB_OT_show_rig(bpy.types.Operator):
+    bl_idname = "fitbridge.show_rig"
+    bl_label = "Mannequin"
+    bl_description = "Show this mannequin (it replaces the other one, in the same place). Click it again to hide it"
+    bl_options = {"REGISTER", "UNDO"}
+
+    kind: EnumProperty(items=[("R15", "R15", "The R15 mannequin Roblox fits and checks against"),
+                              ("R6", "R6", "A blocky R6 to look at (preview only)")])
+
+    @classmethod
+    def description(cls, context, props):
+        if props.kind == "R6":
+            return "R6 preview, in the same place as the R15. Roblox fits and checks rigid accessories against R15"
+        return "R15 mannequin for the chosen body scale (synced from Studio, or boxes until then)"
+
+    def execute(self, context):
+        if rig.shown() == self.kind:
+            rig.clear_all()
+        elif self.kind == "R15":
+            return bpy.ops.fitbridge.spawn_r15()
+        else:
+            rig.spawn_r6(context)
         mark_dirty()
         return {"FINISHED"}
 
@@ -210,16 +245,14 @@ class FB_PT_main(bpy.types.Panel):
         box.label(text="Rig", icon="ARMATURE_DATA")
         box.prop(st, "body_scale")
         row = box.row(align=True)
-        row.operator("fitbridge.spawn_r15", icon="OUTLINER_OB_ARMATURE")
-        row.operator("fitbridge.spawn_r6", icon="MESH_CUBE")
+        cur = rig.shown()
+        row.operator("fitbridge.show_rig", text="R15", icon="OUTLINER_OB_ARMATURE", depress=cur == "R15").kind = "R15"
+        row.operator("fitbridge.show_rig", text="R6 preview", icon="MESH_CUBE", depress=cur == "R6").kind = "R6"
         if spec.cached_rig(st.body_scale) is None:
             col = box.column(align=True)
             col.scale_y = 0.8
             col.label(text="Open Studio with the FitBridge plugin", icon="INFO")
             col.label(text="to fetch the rig (box rig until then).")
-        sc, src = rig.spawned_r15()
-        if sc is not None and sc != st.body_scale:
-            box.label(text=f"Spawned rig is {sc}: spawn again", icon="ERROR")
 
         box = lay.box()
         box.label(text="Accessory", icon="MOD_CLOTH")
@@ -333,7 +366,7 @@ def _on_load(*_args):
     evaluate.LIVE["result"] = None
 
 
-classes = (FB_Settings, FB_Prefs, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_reset_camera, FB_OT_send,
+classes = (FB_Settings, FB_Prefs, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_send,
            FB_OT_restart_server, FB_PT_main)
 
 

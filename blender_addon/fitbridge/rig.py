@@ -11,8 +11,17 @@ from . import geom, spec
 
 R15_COLL = "FitBridge R15"
 R6_COLL = "FitBridge R6 preview"
-R6_SIDE = 4.0                  # the R6 preview stands 4 studs to the character's right (Roblox +X), beside the R15
-INSET = 0.004                  # boxes shrink this much (display only) so touching faces don't z-fight
+# Display only: each part shrinks a little toward its centre, by a different amount from its neighbours, so faces of
+# touching parts never sit in the same plane and flicker. Checks always use the real sizes.
+_INSET_BY_PART = {"Head": 0.002, "UpperTorso": 0.006, "LowerTorso": 0.010,
+                  "UpperArm": 0.002, "LowerArm": 0.008, "Hand": 0.004,
+                  "UpperLeg": 0.002, "LowerLeg": 0.008, "Foot": 0.004,
+                  "Torso": 0.006, "Arm": 0.002, "Leg": 0.010}
+
+
+def _inset_for(name):
+    key = name.replace("Left", "").replace("Right", "").strip()
+    return _INSET_BY_PART.get(key, 0.004)
 CAM_NAME = "FitBridge Thumbnail"
 
 
@@ -55,28 +64,42 @@ def _part_object(coll, name, V, T):
     return ob
 
 
-def spawn_r15(context, scale):
-    """the mannequin for a body scale; parts are built in place (Roblox world -> Blender world), unselectable"""
+def shown():
+    """which mannequin is in the file: "R15", "R6" or None"""
+    if bpy.data.collections.get(R15_COLL) is not None:
+        return "R15"
+    if bpy.data.collections.get(R6_COLL) is not None:
+        return "R6"
+    return None
+
+
+def clear_all():
     _clear(R15_COLL)
+    _clear(R6_COLL)
+
+
+def spawn_r15(context, scale):
+    """the mannequin for a body scale, in place of whichever mannequin was there (Roblox world -> Blender world),
+    unselectable"""
+    clear_all()
     data = spec.rig(scale)
     coll = _collection(context, R15_COLL)
     coll["fitbridge_scale"] = scale
     coll["fitbridge_source"] = "standin" if data.get("standin") else "studio"
     for p in data["parts"]:
         V, T = geom.part_mesh(p)
-        if not (p.get("mesh") or {}).get("positions"):
-            V = _inset(V)
+        V = _inset(V, _inset_for(p["name"]))
         C = geom.cframe_to_matrix(p["cframe"])
         Vw = (V @ C[:3, :3].T + C[:3, 3]) @ geom.P.T
         _part_object(coll, p["name"], Vw, T)
     return coll
 
 
-def _inset(V):
-    """pull a generated part in by INSET on every side, so coplanar faces of touching parts don't flicker"""
+def _inset(V, amount):
+    """pull a part in by `amount` on every side, toward its own centre"""
     c = (V.max(axis=0) + V.min(axis=0)) / 2
     half = np.maximum((V.max(axis=0) - V.min(axis=0)) / 2, 1e-9)
-    return c + (V - c) * np.maximum(half - INSET, half * 0.5) / half
+    return c + (V - c) * np.maximum(half - amount, half * 0.5) / half
 
 
 def spawned_r15():
@@ -87,11 +110,12 @@ def spawned_r15():
 
 
 def spawn_r6(context):
-    _clear(R6_COLL)
+    """the blocky R6 preview, standing where the R15 stands (it replaces it)"""
+    clear_all()
     coll = _collection(context, R6_COLL)
     for name, p in spec.SPEC["r6_preview"]["parts"].items():
         V, T = geom.box_mesh(p["size"])
-        Vw = (_inset(V) + np.asarray(p["cframe"][:3], float) + (R6_SIDE, 0, 0)) @ geom.P.T
+        Vw = (_inset(V, _inset_for(name)) + np.asarray(p["cframe"][:3], float)) @ geom.P.T
         _part_object(coll, name, Vw, T)
     return coll
 
