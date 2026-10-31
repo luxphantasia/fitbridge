@@ -267,6 +267,25 @@ def out_of_frame(res, g):
 
 # ------------------------------------------------------------------------------------------------------- the view
 
+def _addon_prefs(context):
+    a = context.preferences.addons.get(__package__)
+    return a.preferences if a else None
+
+
+def tilt_lock(context, on):
+    """Lock tilt: while framing, orbit as Turntable (no sideways roll), then give back your own orbit style. The
+    original is kept in the addon prefs too, so a crash mid-framing is undone on the next start."""
+    p = _addon_prefs(context)
+    inputs = context.preferences.inputs
+    if on:
+        if p is not None and not p.saved_orbit:
+            p.saved_orbit = inputs.view_rotate_method
+        inputs.view_rotate_method = "TURNTABLE"
+    elif p is not None and p.saved_orbit:
+        inputs.view_rotate_method = p.saved_orbit
+        p.saved_orbit = ""
+
+
 def view_on(context):
     """look through the shot's camera; viewport navigation moves the camera; mannequin ghosted (drawn, not rendered)"""
     from .evaluate import LIVE
@@ -292,6 +311,9 @@ def view_on(context):
                                      "lock": sp.lock_camera}
         r3.view_perspective = "CAMERA"
         sp.lock_camera = True
+    p = _addon_prefs(context)
+    if p is not None and p.lock_tilt:
+        tilt_lock(context, True)
     if res is not None and res.get("A") is not None:
         aim_views(context, res, g)
     for area in _view3d_areas(context):                         # make the camera frame fill the viewport
@@ -308,6 +330,7 @@ def view_on(context):
 def view_off(context):
     sc = context.scene
     st = sc.fitbridge
+    tilt_lock(context, False)
     try:
         saved = json.loads(st.thumb_saved or "{}")
     except ValueError:
