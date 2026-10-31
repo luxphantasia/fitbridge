@@ -317,11 +317,13 @@ local function meshAssetId(manifest, mesh)
 	end
 	local em = buildEditableMesh(mesh)
 	local id, err = upload(em, Enum.AssetType.Mesh, manifest.name .. " mesh")
-	em:Destroy()
 	if id then
+		em:Destroy()
 		rememberUpload(manifest.mesh.sha256, id)
+		return id, nil
 	end
-	return id, err
+	-- Hand back the in-memory mesh so the accessory can still be previewed in place.
+	return nil, err, em
 end
 
 -- Returns asset id, or nil + a message (with a manual fallback when the texture is too big).
@@ -354,11 +356,12 @@ local function textureAssetId(manifest, map, info)
 	end
 	img:WritePixelsBuffer(Vector2.zero, img.Size, Geometry.base64ToBuffer(tex.rgba_base64))
 	local id, upErr = upload(img, Enum.AssetType.Image, manifest.name .. " " .. map)
-	img:Destroy()
 	if id then
+		img:Destroy()
 		rememberUpload(info.sha256, id)
+		return id, nil
 	end
-	return id, upErr
+	return nil, upErr, img
 end
 
 ---------------------------------------------------------------- building
@@ -386,26 +389,32 @@ local function dummyFor(scaleName)
 	return rig
 end
 
-local function setTexture(handle: MeshPart, pbr, ids)
-	local function uri(id)
-		return "rbxassetid://" .. tostring(id)
+-- `maps` values are asset ids (uploaded) or EditableImages (preview only, not uploadable).
+local function setTexture(handle: MeshPart, pbr, maps)
+	local function content(v)
+		return if type(v) == "number" then Content.fromUri("rbxassetid://" .. v) else Content.fromObject(v)
 	end
 	if pbr then
 		local sa = Instance.new("SurfaceAppearance")
 		local props = { color = "ColorMap", normal = "NormalMap", roughness = "RoughnessMap", metalness = "MetalnessMap" }
 		for map, prop in props do
-			if ids[map] then
+			if maps[map] then
 				local ok = pcall(function()
-					(sa :: any)[prop .. "Content"] = Content.fromUri(uri(ids[map]))
+					(sa :: any)[prop .. "Content"] = content(maps[map])
 				end)
-				if not ok then
-					(sa :: any)[prop] = uri(ids[map])
+				if not ok and type(maps[map]) == "number" then
+					(sa :: any)[prop] = "rbxassetid://" .. maps[map]
 				end
 			end
 		end
 		sa.Parent = handle
-	elseif ids.color then
-		handle.TextureID = uri(ids.color)
+	elseif maps.color then
+		local ok = pcall(function()
+			(handle :: any).TextureContent = content(maps.color)
+		end)
+		if not ok and type(maps.color) == "number" then
+			handle.TextureID = "rbxassetid://" .. maps.color
+		end
 	end
 end
 
@@ -462,26 +471,37 @@ local function build(manifest)
 	local checks = Geometry.studioChecks(manifest, mesh, rules)
 	local problems = {}
 
-	local meshId, meshErr = meshAssetId(manifest, mesh)
-	if not meshId then
-		return nil, { "Mesh upload failed: " .. tostring(meshErr) }, checks
-	end
-	local textureIds = {}
+	local meshId, meshErr, previewMesh = meshAssetId(manifest, mesh)
+	local uploaded = meshId ~= nil
+	local textureIds, textureMaps = {}, {}
 	for map, info in manifest.textures or {} do
 		if info then
-			local id, texErr = textureAssetId(manifest, map, info)
+			local id, texErr, previewImage = textureAssetId(manifest, map, info)
 			if id then
 				textureIds[map] = id
+				textureMaps[map] = id
 			else
+				uploaded = false
+				textureMaps[map] = previewImage
 				table.insert(problems, texErr)
 			end
 		end
 	end
+	table.insert(checks, {
+		id = "uploaded",
+		status = if uploaded then "pass" else "fail",
+		message = if uploaded
+			then "Mesh and textures are uploaded assets"
+			else "Preview only: Studio couldn't upload the mesh/textures (" .. tostring(meshErr or problems[1]) .. ")",
+	})
 
 	local okPart, handle = pcall(function()
-		return AssetService:CreateMeshPartAsync(Content.fromUri("rbxassetid://" .. meshId))
+		if meshId then
+			return AssetService:CreateMeshPartAsync(Content.fromUri("rbxassetid://" .. meshId))
+		end
+		return AssetService:CreateMeshPartAsync(Content.fromObject(previewMesh))
 	end)
-	if not okPart then
+	if not okPart and meshId then
 		okPart, handle = pcall(function()
 			return (AssetService :: any):CreateMeshPartAsync("rbxassetid://" .. meshId)
 		end)
@@ -502,7 +522,7 @@ local function build(manifest)
 	handle.CanQuery = false
 	handle.Massless = true
 	handle.Anchored = false
-	setTexture(handle, manifest.pbr, textureIds)
+	setTexture(handle, manifest.pbr, textureMaps)
 
 	local attachment = Instance.new("Attachment")
 	attachment.Name = manifest.attachment
@@ -529,16 +549,29 @@ local function build(manifest)
 	camValue.Parent = cfg
 	cfg.Parent = accessory
 
-	-- Replace any earlier build of this item, then wear it on the matching test avatar.
+	-- Replace any earlier build of this item, then seat it on the matching test avatar's attachment.
+	-- Not Humanoid:AddAccessory: wearing adds an AccessoryRigidConstraint that validation doesn't strip.
+	-- No attributes on the Accessory either: Roblox's AttributesAllowed check rejects them.
 	local rig = dummyFor(manifest.body_scale)
-	for _, old in rig:GetChildren() do
+	for _, old in folder():GetChildren() do
 		if old:IsA("Accessory") and old.Name == manifest.name then
 			old:Destroy()
 		end
 	end
-	local humanoid = rig:FindFirstChildOfClass("Humanoid")
-	-- No attributes on the Accessory: Roblox's AttributesAllowed check rejects them.
-	humanoid:AddAccessory(accessory)
+	local bodyAttachment = nil
+	for _, d in rig:GetDescendants() do
+		if d:IsA("Attachment") and d.Name == manifest.attachment and d.Parent ~= handle then
+			bodyAttachment = d
+			break
+		end
+	end
+	if bodyAttachment then
+		handle.CFrame = bodyAttachment.WorldCFrame * attachment.CFrame:Inverse()
+	else
+		table.insert(problems, "Test avatar has no " .. manifest.attachment .. "; placed above it.")
+		handle.CFrame = rig:GetPivot() * CFrame.new(0, 6, 0)
+	end
+	accessory.Parent = folder()
 
 	for _, c in instanceTreeChecks(accessory) do
 		table.insert(checks, c)
