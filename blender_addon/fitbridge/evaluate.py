@@ -185,6 +185,19 @@ def floating_gap(V, rig_data, part_name, limit=4000):
     return best
 
 
+HEAVY_FACES = 150_000          # beyond this a mesh isn't read for live checks (Roblox allows 4,000 triangles anyway)
+
+
+def in_use(context):
+    """FitBridge only checks live in a file where you're using it: a mannequin shown, an accessory mesh picked, or
+    Thumbnail view on. Otherwise selecting things (a sculpt with millions of faces...) costs nothing."""
+    st = context.scene.fitbridge
+    if st.target is not None or st.thumb_view:
+        return True
+    from .rig import R15_COLL, R6_COLL
+    return any(bpy.data.collections.get(n) is not None for n in (R15_COLL, R6_COLL))
+
+
 def evaluate(context):
     """run every check on the current accessory -> a result dict (also kept in LIVE)"""
     st = context.scene.fitbridge
@@ -205,6 +218,14 @@ def evaluate(context):
         LIVE["result"] = res
         return res
     res["object"] = ob.name
+    faces = len(ob.data.polygons)
+    if faces > HEAVY_FACES:                                   # never read millions of faces just to say "too many"
+        mx = int(lim["max_triangles"])
+        res["checks"].append(_check("triangles", "fail", f"{faces:,} faces: far over {mx:,} triangles "
+                                                         "(live checks paused for this mesh)"))
+        res["heavy"] = True
+        LIVE["result"] = res
+        return res
     dg = context.evaluated_depsgraph_get()
     m = read_mesh(ob, dg)
     used = np.unique(m["loop_vert"][m["tri_loops"].ravel()]) if len(m["tri_loops"]) else np.zeros(0, np.int64)

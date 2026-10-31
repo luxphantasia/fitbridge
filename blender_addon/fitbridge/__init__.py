@@ -357,6 +357,8 @@ class FB_PT_main(bpy.types.Panel):
         if res is not None:
             for c in res["checks"]:
                 col.label(text=c["message"], icon=ICONS[c["status"]])
+        elif not evaluate.in_use(context):
+            col.label(text="Show R15 or R6, or pick a mesh, to start", icon="INFO")
 
         box = lay.box()
         box.label(text="Thumbnail", icon="CAMERA_DATA")
@@ -454,8 +456,11 @@ def _tick():
             _dirty["flag"] = False
             _dirty["last"] = now
             try:
-                res = evaluate.evaluate(bpy.context)
-                thumb.sync(bpy.context, res)
+                if evaluate.in_use(bpy.context):
+                    res = evaluate.evaluate(bpy.context)
+                    thumb.sync(bpy.context, res)
+                else:
+                    evaluate.LIVE["result"] = None
             except Exception as e:
                 print(f"FitBridge: check failed: {e}")
             changed = True
