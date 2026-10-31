@@ -744,7 +744,13 @@ if not (spec.cache_dir() / "rig_R6.json").exists():
 bpy.ops.fitbridge.show_rig(kind="R15")
 done.append("older rig_version shown but re-asked, current swaps in; R6 boxes until Studio's real R6 arrives")
 
-# --- off again
+# --- off again: the thumbnail cameras hide with it
+st.thumb_view = False
+if not bpy.data.collections["FitBridge Thumbnails"].hide_viewport:
+    fail("the thumbnail camera should hide when Thumbnail view is off")
+st.thumb_view = True
+if bpy.data.collections["FitBridge Thumbnails"].hide_viewport:
+    fail("and show again when it's on")
 st.thumb_view = False
 if ctx.scene.render.resolution_x == 420 or bpy.data.collections["FitBridge R15"].hide_viewport:
     fail("thumbnail off should restore")
