@@ -75,6 +75,7 @@ class FB_Prefs(bpy.types.AddonPreferences):
                             description="Roblox Open Cloud key with Assets read + write. Stays on this computer: "
                                         "only sent to apis.roblox.com, never over the bridge")
     creator_type: EnumProperty(name="Creator", items=[("User", "User", ""), ("Group", "Group", "")])
+    welcomed: BoolProperty(default=False, options={"HIDDEN"})
     creator_id: StringProperty(name="Creator id",
                                description="The user or group that will submit the UGC item (Roblox checks that "
                                            "it owns the mesh and textures)")
@@ -197,6 +198,10 @@ class FB_PT_main(bpy.types.Panel):
     def draw(self, context):
         st = context.scene.fitbridge
         lay = self.layout
+        p = prefs()
+        if p is not None and not p.welcomed:
+            p.welcomed = True                       # the panel has been found: the viewport hint goes away
+            context.preferences.is_dirty = True
         res = evaluate.LIVE["result"]
         if abs(context.scene.unit_settings.scale_length - 1.0) > 1e-6:
             lay.label(text="Scene unit scale isn't 1.0 (1 unit = 1 stud)", icon="ERROR")
@@ -226,6 +231,8 @@ class FB_PT_main(bpy.types.Panel):
             box.label(text=f"Using active: {ob.name}" if ob else "No mesh picked", icon="OBJECT_DATA")
         box.prop(st, "item_name")
         box.prop(st, "show_box")
+        if not draw.ready(context):
+            box.label(text="Spawn a rig and pick your accessory mesh to see the bounds box.", icon="INFO")
 
         box = lay.box()
         box.label(text="Checks", icon="CHECKBOX_HLT")

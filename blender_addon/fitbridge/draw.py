@@ -24,7 +24,14 @@ def _colour(res):
 def _visible(context):
     sc = context.scene
     st = getattr(sc, "fitbridge", None)
-    return st is not None and st.show_box and not st.thumb_view
+    return st is not None and st.show_box and not st.thumb_view and ready(context)
+
+
+def ready(context):
+    """only once this file has a FitBridge rig and there's an accessory mesh (so a fresh scene stays clean)"""
+    from . import evaluate, rig
+    has_rig = any(bpy.data.collections.get(n) is not None for n in (rig.R15_COLL, rig.R6_COLL))
+    return has_rig and evaluate.target_object(context) is not None
 
 
 def draw_view():
@@ -62,8 +69,23 @@ def draw_view():
     gpu.state.blend_set("NONE")
 
 
+def _hint(context):
+    """until the FitBridge tab has been opened once: where to find it"""
+    a = context.preferences.addons.get(__package__)
+    if a is None or a.preferences.welcomed:
+        return False
+    ui = context.preferences.system.ui_scale
+    blf.size(0, 13 * ui)
+    blf.color(0, 0.85, 0.85, 0.85, 1.0)
+    blf.position(0, 20 * ui, 60 * ui, 0)
+    blf.draw(0, "FitBridge: press N for the sidebar, then open the FitBridge tab")
+    return True
+
+
 def draw_text():
     context = bpy.context
+    if _hint(context):
+        return
     res = LIVE["result"]
     if res is None or not _visible(context):
         return

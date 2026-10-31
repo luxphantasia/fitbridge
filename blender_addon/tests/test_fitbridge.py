@@ -110,6 +110,15 @@ if code != 404 or "Send to Studio" not in e.get("error", ""):
     fail(f"package before sending should be a 404 with a sentence: {code} {e}")
 done.append("/v1/hello answers, asks for rules; /v1/package 404 until sent")
 
+# --- a fresh scene with a stray mesh and no rig: no ghost box yet
+from fitbridge import draw  # noqa: E402
+bpy.ops.mesh.primitive_cube_add()
+stray = ctx.active_object
+if draw.ready(ctx):
+    fail("no ghost box before a rig is spawned")
+bpy.data.objects.remove(stray)
+done.append("no ghost box until a rig is spawned and a mesh is picked")
+
 # --- a hat: 1 x 1 x 0.4 box sitting on the stand-in head (HatAttachment at Roblox (0, 2, 0) = Blender (0, 0, 2))
 bm = bmesh.new()
 bmesh.ops.create_cube(bm, size=1.0)
@@ -129,6 +138,8 @@ bpy.ops.fitbridge.spawn_r15()
 if "Normal" not in server.state["need_rigs"]:
     fail("spawning an uncached scale should ask Studio for that rig")
 ctx.view_layer.update()
+if not draw.ready(ctx):
+    fail("rig + mesh: the ghost box should show")
 res = evaluate.evaluate(ctx)
 by = {c["id"]: c for c in res["checks"]}
 if set(by) != set(spec.CHECK_IDS):
