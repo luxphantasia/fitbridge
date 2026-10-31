@@ -118,6 +118,29 @@ if st.body_scale != "Classic":
     fail("fix_scales")
 done.append("only the Classic body scale is offered")
 
+# --- no FitBridge use in the file (no rig, no picked mesh, no thumbnail view): nothing is checked, so selecting a
+#     huge mesh costs nothing; and a huge mesh is never read even when FitBridge is in use
+if evaluate.in_use(ctx):
+    fail("a fresh file shouldn't count as using FitBridge")
+big = bpy.data.meshes.new("Huge")
+bmh = bmesh.new()
+bmesh.ops.create_grid(bmh, x_segments=400, y_segments=400, size=1.0)       # 160,000 faces
+bmh.to_mesh(big)
+bmh.free()
+huge = bpy.data.objects.new("Huge", big)
+ctx.scene.collection.objects.link(huge)
+ctx.view_layer.objects.active = huge
+import time as _time  # noqa: E402
+t0 = _time.perf_counter()
+r = evaluate.evaluate(ctx)
+dt = _time.perf_counter() - t0
+if not r.get("heavy") or r["checks"][0]["status"] != "fail" or "160,000 faces" not in r["checks"][0]["message"] \
+        or dt > 0.2:
+    fail(f"a huge mesh should be refused at once: {r['checks']} in {dt:.3f} s")
+bpy.data.objects.remove(huge)
+bpy.data.meshes.remove(big)
+done.append("FitBridge idle in files that don't use it; a 160k-face mesh is refused in %.0f ms, not read" % (dt * 1000))
+
 # --- a fresh scene with a stray mesh and no rig: no ghost box yet
 from fitbridge import draw  # noqa: E402
 bpy.ops.mesh.primitive_cube_add()
