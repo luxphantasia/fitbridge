@@ -13,7 +13,7 @@ import tempfile
 
 import bpy
 import numpy as np
-from mathutils import Matrix, Vector
+from mathutils import Matrix
 
 from . import geom, spec
 
@@ -459,24 +459,45 @@ def preview(context):
     return bpy.data.images.get("Render Result")
 
 
-def render_views(context, ob, views, size):
-    """PNG bytes of ob alone from each (turn, tilt), on a mid grey, framed the same way. Your file's cameras, render
-    settings and Render Result output path all come back afterwards."""
+def centred_verts(context, ob):
+    """ob's evaluated vertices as the Handle will have them: (centre in Blender world, points in Roblox axes around it)"""
+    from .evaluate import read_mesh
+    co = read_mesh(ob, context.evaluated_depsgraph_get())["co"]
+    centre = (co.min(axis=0) + co.max(axis=0)) / 2
+    return centre, (co - centre) @ geom.P.T
+
+
+def frame_shot(V, turn, tilt, fill=0.88):
+    """(distance, pan) that centre the points V in a square thumbnail from this angle and fill it to `fill` of the frame,
+    measured on the actual silhouette through the thumbnail's lens"""
+    d = _dir(turn, tilt)
+    right, up = _basis(d)
+    x, y, z = V @ right, V @ up, V @ d
+    pan = np.array([(x.min() + x.max()) / 2, (y.min() + y.max()) / 2])
+    distance = 1.0
+    for _i in range(4):                                         # nearer points look bigger, so settle it in a few passes
+        distance = float(np.max(z + np.maximum(np.abs(x - pan[0]), np.abs(y - pan[1])) / (TAN * fill)))
+        depth = np.maximum(distance - z, 1e-6)
+        px, py = (x - pan[0]) / depth, (y - pan[1]) / depth
+        pan += np.array([(px.min() + px.max()) / 2, (py.min() + py.max()) / 2]) * distance
+    distance = float(np.max(z + np.maximum(np.abs(x - pan[0]), np.abs(y - pan[1])) / (TAN * fill)))
+    return max(distance, 0.2), (float(pan[0]), float(pan[1]))
+
+
+def render_shots(context, ob, centre, shots, size):
+    """PNG bytes of ob alone through the thumbnail's own lens, for each (turn, tilt, distance, pan), on a mid grey. Your
+    file's cameras, render settings and output path all come back afterwards."""
     sc = context.scene
     r = sc.render
     shading = sc.display.shading
     data = bpy.data.cameras.new("FitBridge Auto")
     data.lens_unit = "FOV"
-    data.angle = math.radians(40)
+    data.angle = math.radians(FOV)
     cam = bpy.data.objects.new("FitBridge Auto", data)
     sc.collection.objects.link(cam)
-    corners = np.array([ob.matrix_world @ Vector(c) for c in ob.bound_box])
-    centre = (corners.min(axis=0) + corners.max(axis=0)) / 2
-    radius = max(float(np.linalg.norm(corners.max(axis=0) - corners.min(axis=0))) / 2, 1e-3)
-    distance = radius / math.tan(data.angle / 2) * 1.1
     saved = (r.filepath, r.image_settings.file_format, r.image_settings.color_mode, shading.background_type,
              tuple(shading.background_color))
-    shots = []
+    out = []
     try:
         with tempfile.TemporaryDirectory() as folder, _isolated(context, ob, cam, size):
             r.film_transparent = False
@@ -484,20 +505,21 @@ def render_views(context, ob, views, size):
             r.image_settings.color_mode = "RGB"
             shading.background_type = "VIEWPORT"
             shading.background_color = (0.5, 0.5, 0.5)
-            for i, (turn, tilt) in enumerate(views):
-                eye = centre + geom.P.T @ _dir(turn, tilt) * distance
-                cam.matrix_world = Matrix(geom.look_at(eye, centre, up=(0.0, 0.0, 1.0)).tolist())
+            for i, (turn, tilt, distance, pan) in enumerate(shots):
+                m = geom.to_blender(local_matrix(turn, tilt, distance, pan, (0.0, 0.0, 0.0)))
+                m[:3, 3] += centre
+                cam.matrix_world = Matrix(m.tolist())
                 context.view_layer.update()
-                r.filepath = os.path.join(folder, f"view{i}.png")
+                r.filepath = os.path.join(folder, f"shot{i}.png")
                 _render_still(context)
                 with open(r.filepath, "rb") as f:
-                    shots.append(f.read())
+                    out.append(f.read())
     finally:
         r.filepath, r.image_settings.file_format, r.image_settings.color_mode = saved[:3]
         shading.background_type, shading.background_color = saved[3], saved[4]
         bpy.data.objects.remove(cam)
         bpy.data.cameras.remove(data)
-    return shots
+    return out
 
 
 def _render_still(context):

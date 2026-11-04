@@ -785,14 +785,15 @@ done.append("old files: a framed shot turns 180 once and keeps its picture, the 
 from types import SimpleNamespace  # noqa: E402
 from fitbridge import auto  # noqa: E402
 
-AI = {"posts": [], "reply": None, "code": 200}
+AI = {"posts": [], "reply": None, "second": None, "code": 200}
 
 
 class FakeClaude(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers["Content-Length"])
         AI["posts"].append({"path": self.path, "headers": dict(self.headers), "body": json.loads(self.rfile.read(n))})
-        d = json.dumps(AI["reply"]).encode()
+        second = "accessory_type" not in AI["posts"][-1]["body"]["output_config"]["format"]["schema"]["properties"]
+        d = json.dumps(AI["second"] if second and AI["second"] is not None else AI["reply"]).encode()
         self.send_response(AI["code"])
         self.send_header("Content-Length", str(len(d)))
         self.end_headers()
@@ -813,7 +814,7 @@ auto.prefs = lambda: fake_prefs
 
 def said(**over):
     d = {"accessory_type": "Face", "attachment": "FaceFrontAttachment", "name": "Test Mask",
-         "summary": "Mask, worn on the front of the face.", "thumbnail_turn": 20.0, "thumbnail_tilt": 12.0}
+         "summary": "Mask, worn on the front of the face.", "shot": 3}
     d.update(over)
     return {"stop_reason": "end_turn", "content": [{"type": "thinking", "thinking": ""},
                                                    {"type": "text", "text": json.dumps(d)}]}
@@ -857,17 +858,21 @@ if bpy.ops.fitbridge.send.poll():
 st.override = False
 fake_prefs.claude_api_key = "test-claude-key"
 AI["reply"] = said()
+AI["second"] = {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps({"shot": 3})}]}
 kind, line = settle(("ready", "blocked", "failed"))
 if kind != "ready" or line != "Mask, worn on the front of the face.":
     fail(f"Auto mode should end ready: {kind} {line}")
-if len(AI["posts"]) != 1:
-    fail(f"one request per mesh: {len(AI['posts'])}")
+if len(AI["posts"]) != 2:
+    fail(f"one look at a mesh = 2 requests: {len(AI['posts'])}")
+second_look = AI["posts"][1]["body"]["messages"][0]["content"]
+if sum(c["type"] == "image" for c in second_look) != len(auto.NUDGES):
+    fail("the second look should carry the small moves around the first pick")
 ai_post = AI["posts"][0]
 content = ai_post["body"]["messages"][0]["content"]
 pngs = [base64.b64decode(c["source"]["data"]) for c in content if c["type"] == "image"]
-if ai_post["path"] != "/v1/messages" or ai_post["body"]["model"] != "claude-opus-5-5" or len(pngs) != len(auto.VIEWS) or \
+if ai_post["path"] != "/v1/messages" or ai_post["body"]["model"] != "claude-opus-5-5" or len(pngs) != len(auto.ANGLES) or \
         any(not p.startswith(b"\x89PNG") for p in pngs) or len(set(pngs)) < 3:
-    fail(f"the request should carry {len(auto.VIEWS)} different PNG views: {post['path']} {len(pngs)}")
+    fail(f"the request should carry {len(auto.ANGLES)} different PNG shots: {post['path']} {len(pngs)}")
 sent_headers = {k.lower(): v for k, v in ai_post["headers"].items()}
 if sent_headers.get("x-api-key") != "test-claude-key" or "test-claude-key" in json.dumps(ai_post["body"]) or \
         not sent_headers.get("anthropic-version") or sent_headers.get("anthropic-beta") != "server-side-fallback-2026-07-01":
@@ -877,10 +882,27 @@ for k in ai_post["body"]["output_config"]["format"]["schema"]["properties"]:
         fail(f"schema field {k} should be required")
 g_ = mask.fitbridge_thumb
 if (st.acc_type, st.attachment, st.item_name, st.target) != ("Face", "FaceFrontAttachment", "Test Mask", mask) or \
-        abs(g_.turn - 20) > 1e-3 or abs(g_.tilt - 12) > 1e-3 or not g_.manual:
+        abs(g_.turn - 42) > 1e-3 or abs(g_.tilt - 10) > 1e-3 or not g_.manual:      # shot 3 (30, 10), then shot 3 (+12, 0)
     fail(f"the answer should set everything: {st.acc_type} {st.attachment} '{st.item_name}' {g_.turn} {g_.tilt}")
 if not rigmod.shown():
     fail("Auto mode needs a mannequin to check against")
+# the shot fills the frame through the real lens, centred on the item
+evaluate.evaluate(ctx)
+thumb.sync(ctx, evaluate.LIVE["result"])
+Lm = thumb.local_matrix(g_.turn, g_.tilt, g_.distance, (g_.pan_x, g_.pan_y), g_.pivot)
+_c, Vm = thumb.centred_verts(ctx, mask)
+Pc = (Vm - Lm[:3, 3]) @ Lm[:3, :3]
+nx, ny = Pc[:, 0] / -Pc[:, 2] / thumb.TAN, Pc[:, 1] / -Pc[:, 2] / thumb.TAN
+reach = max(np.abs(nx).max(), np.abs(ny).max())
+if not 0.84 < reach <= 0.885 or abs(nx.min() + nx.max()) > 0.02 or abs(ny.min() + ny.max()) > 0.02:
+    fail(f"framing should centre the item and fill 88%: reach {reach}, x {nx.min()} {nx.max()}, y {ny.min()} {ny.max()}")
+stale = json.loads(mask[auto.ANSWER_KEY])
+stale["version"] = 1
+keep_answer = mask[auto.ANSWER_KEY]
+mask[auto.ANSWER_KEY] = json.dumps(stale)
+if auto.answer(mask) is not None:
+    fail("an answer from before real thumbnails must be asked again")
+mask[auto.ANSWER_KEY] = keep_answer
 if ctx.scene.camera is not None and ctx.scene.camera.name.startswith("FitBridge Auto") or "FitBridge Auto" in bpy.data.objects:
     fail("the temporary camera must be gone")
 if not auto.heads_ups(evaluate.LIVE["result"]):
@@ -892,7 +914,7 @@ for _i in range(3):
 mask.location.x += 0.001
 ctx.view_layer.update()
 auto.tick(ctx)
-if len(AI["posts"]) != 1:
+if len(AI["posts"]) != 2:
     fail("moving the object must not cost another request")
 mask.location.x -= 0.001
 # the checks still decide: too high = blocked, however confident the answer
@@ -907,12 +929,14 @@ ctx.view_layer.update()
 mask_me.vertices[0].co.x -= 0.05
 mask_me.update()
 ctx.view_layer.update()
-AI["reply"] = said(accessory_type="Hat", attachment="BodyBackAttachment", thumbnail_turn=999.0, name="N" * 80)
+AI["reply"] = said(accessory_type="Hat", attachment="BodyBackAttachment", shot=999, name="N" * 80)
+AI["second"] = {"stop_reason": "refusal", "content": []}       # a failed second look keeps the first pick
 st.item_name = ""
 settle(("ready", "blocked"))
-if len(AI["posts"]) != 2 or st.acc_type != "Hat" or st.attachment != "HatAttachment" or mask_me.vertices is None or \
-        abs(g_.turn - 180) > 1e-3 or len(st.item_name) != 50:
-    fail(f"second answer: {len(AI['posts'])} {st.acc_type} {st.attachment} {g_.turn} {len(st.item_name)}")
+if len(AI["posts"]) != 4 or st.acc_type != "Hat" or st.attachment != "HatAttachment" or \
+        abs(g_.turn - 0) > 1e-3 or abs(g_.tilt - 5) > 1e-3 or len(st.item_name) != 50:
+    fail(f"second answer: {len(AI['posts'])} {st.acc_type} {st.attachment} {g_.turn} {g_.tilt} {len(st.item_name)}")
+AI["second"] = None
 for code, reply, words in ((401, {"error": {}}, "API key"), (529, {"error": {}}, "busy"),
                            (200, {"stop_reason": "refusal", "content": []}, "declined"),
                            (200, {"stop_reason": "max_tokens", "content": []}, "cut off"),
@@ -933,6 +957,7 @@ for code, reply, words in ((401, {"error": {}}, "API key"), (529, {"error": {}},
     if bpy.ops.fitbridge.send.poll():
         fail("no answer = Send off")
 AI["code"], AI["reply"] = 200, said()
+AI["second"] = {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps({"shot": 1})}]}
 if bpy.ops.fitbridge.auto_retry() != {"FINISHED"}:
     fail("Try again")
 settle(("ready", "blocked"))
@@ -944,8 +969,8 @@ bpy.data.objects.remove(mask)
 for o in keep_auto[5]:
     o.select_set(True)
 _ai.shutdown()
-done.append("Auto mode (fake Anthropic): off = nothing sent, no key = says so, 5 PNG views + key only in the header, answer "
-            "sets type / attachment / name / shot, one request per mesh, moving doesn't re-ask, checks and Override can't be "
+done.append("Auto mode (fake Anthropic): off = nothing sent, no key = says so, real thumbnail candidates + key only in the header, "
+            "a second look around the pick, framing fills the frame, answer sets type / attachment / name / shot, one look per mesh, moving doesn't re-ask, checks and Override can't be "
             "got around, bad answers corrected, each failure said once")
 
 # --- the selected mesh is the accessory: one follows, several ask you to choose, none keeps the last

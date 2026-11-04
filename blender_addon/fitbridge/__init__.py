@@ -149,8 +149,8 @@ class FB_Prefs(bpy.types.AddonPreferences):
                                            "it owns the mesh and textures)")
     auto_mode: BoolProperty(name="Auto (experimental)", default=False, update=lambda self, context: mark_dirty(),
                             description="Claude looks at the selected mesh and sets the type, attachment, name and "
-                                        "thumbnail for you. Each new mesh sends 5 renders of it to Anthropic, billed "
-                                        "to your API key")
+                                        "thumbnail for you. Each new mesh sends 17 renders of it to Anthropic in two "
+                                        "requests, billed to your API key")
     claude_api_key: StringProperty(name="Anthropic API key", subtype="PASSWORD",
                                    description="For Auto mode. Stays on this computer: only sent to api.anthropic.com")
 
