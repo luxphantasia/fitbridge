@@ -494,6 +494,9 @@ end
 
 ---------------------------------------------------------------- building
 
+local CAMERA_AIM_SIN = math.sin(math.rad(20))
+local CAMERA_REACH = 100
+
 local function folder()
 	local f = workspace:FindFirstChild(FOLDER_NAME)
 	if not f then
@@ -504,16 +507,69 @@ local function folder()
 	return f
 end
 
-local function dummyFor(scaleName)
-	for _, m in folder():GetChildren() do
-		if m:GetAttribute(ATTR .. "Scale") == scaleName then
-			return m
+-- Where to stand a rig of this height so it's on the ground and on screen. Excludes our own folder from every ray.
+local function groundInFrontOfCamera(height: number): (Vector3, Vector3)
+	local cam = workspace.CurrentCamera
+	local origin, look = cam.CFrame.Position, cam.CFrame.LookVector
+	local flat = Vector3.new(look.X, 0, look.Z)
+	if flat.Magnitude < 0.01 then
+		flat = Vector3.new(cam.CFrame.UpVector.X, 0, cam.CFrame.UpVector.Z) -- looking straight down
+	end
+	local forward = flat.Unit
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { folder() }
+	params.RespectCanCollide = true
+
+	-- Aim at the middle of the view, or a little below the horizon when looking level or up.
+	local aim = look
+	if aim.Y > -CAMERA_AIM_SIN then
+		aim = forward * math.sqrt(1 - CAMERA_AIM_SIN ^ 2) - Vector3.yAxis * CAMERA_AIM_SIN
+	end
+	local near = (height / 2) / math.tan(math.rad(cam.FieldOfView / 2)) * 1.5 -- far enough to see the whole rig
+	local hit = workspace:Raycast(origin, aim * CAMERA_REACH, params)
+	if not hit then
+		return origin + forward * near - Vector3.yAxis * (height / 2), forward -- no ground in reach: stand at eye level
+	end
+	local distance = (hit.Position - origin):Dot(forward)
+	distance = if hit.Normal.Y > 0.5 then math.max(distance, near) else math.max(distance - 2, 2) -- step back from walls
+	local spot = origin + forward * distance
+	local floor = workspace:Raycast(spot, -Vector3.yAxis * (CAMERA_REACH * 2), params)
+	return Vector3.new(spot.X, if floor then floor.Position.Y else hit.Position.Y, spot.Z), forward
+end
+
+-- Stands the rig facing the camera. Accessories already on it go with it.
+local function standInFrontOfCamera(rig: Model)
+	local before = rig:GetPivot()
+	local feet, forward = groundInFrontOfCamera(rig:GetExtentsSize().Y)
+	rig:PivotTo(CFrame.lookAt(feet, feet - forward))
+	local box, size = rig:GetBoundingBox()
+	rig:PivotTo(rig:GetPivot() + Vector3.yAxis * (feet.Y - (box.Position.Y - size.Y / 2)))
+	local moved = rig:GetPivot() * before:Inverse()
+	for _, acc in folder():GetChildren() do
+		local handle = acc:IsA("Accessory") and acc:FindFirstChild("Handle") :: BasePart?
+		if handle and (handle.Position - before.Position).Magnitude < 10 then
+			handle.CFrame = moved * handle.CFrame
 		end
 	end
-	local rig = makeRig(scaleName)
-	local slot = #folder():GetChildren()
-	rig.Parent = folder()
-	rig:PivotTo(CFrame.new(slot * 10, rig:GetExtentsSize().Y / 2, 0))
+end
+
+local function dummyFor(scaleName, moveToCamera)
+	local rig = nil
+	for _, m in folder():GetChildren() do
+		if m:GetAttribute(ATTR .. "Scale") == scaleName then
+			rig = m
+			break
+		end
+	end
+	local isNew = rig == nil
+	if isNew then
+		rig = makeRig(scaleName)
+		rig.Parent = folder()
+	end
+	if isNew or moveToCamera then
+		standInFrontOfCamera(rig)
+	end
 	return rig
 end
 
@@ -652,7 +708,7 @@ local UPLOAD_NOTES = {
 	pending = "Preview only: Blender is still uploading to Roblox. Studio rebuilds when it's done.",
 }
 
-local function build(manifest)
+local function build(manifest, moveToCamera)
 	local mesh, err = request("GET", "/v1/package/mesh")
 	if not mesh then
 		return nil, { err }
@@ -784,7 +840,7 @@ local function build(manifest)
 	-- Replace any earlier build of this item, then seat it on the matching test avatar's attachment.
 	-- Not Humanoid:AddAccessory: wearing adds an AccessoryRigidConstraint that validation doesn't strip.
 	-- No attributes on the Accessory either: Roblox's AttributesAllowed check rejects them.
-	local rig = dummyFor(manifest.body_scale)
+	local rig = dummyFor(manifest.body_scale, moveToCamera)
 	for _, old in folder():GetChildren() do
 		if old:IsA("Accessory") and old.Name == manifest.name then
 			old:Destroy()
@@ -948,7 +1004,7 @@ local function showChecks(checks, problems)
 	checksLabel.Text = table.concat(lines, "\n")
 end
 
-local function buildCurrent()
+local function buildCurrent(moveToCamera)
 	local manifest, err = request("GET", "/v1/package")
 	if not manifest then
 		statusLabel.Text = err
@@ -960,7 +1016,7 @@ local function buildCurrent()
 		manifest.attachment,
 		manifest.body_scale
 	)
-	local result, problems, checks = build(manifest)
+	local result, problems, checks = build(manifest, moveToCamera)
 	showChecks(checks, problems)
 	if result then
 		rulesLabel.Text = "Rules: " .. result.rulesSource
@@ -997,7 +1053,10 @@ local function buildCurrent()
 	})
 end
 
-button("Build now", buildCurrent)
+-- Only Build now moves the rig. An auto-build on Send leaves it where you're looking at it.
+button("Build now", function()
+	buildCurrent(true)
+end)
 
 button("Preview thumbnail camera", function()
 	local acc = lastBuilt
