@@ -182,7 +182,7 @@ def _part_tree(rig_data, part_name):
             continue
         V, T = geom.part_mesh(p)
         C = geom.cframe_to_matrix(p["cframe"])
-        Vw = (V @ C[:3, :3].T + C[:3, 3]) @ geom.P.T              # Roblox world -> Blender world
+        Vw = (V @ C[:3, :3].T + C[:3, 3]) @ geom.P              # Roblox world -> Blender world
         # +1 when the triangles face outward (positive volume), so "inside" works whatever the winding
         a, b, c = Vw[T[:, 0]], Vw[T[:, 1]], Vw[T[:, 2]]
         sign = 1.0 if np.einsum("ij,ij->i", a, np.cross(b, c)).sum() >= 0 else -1.0

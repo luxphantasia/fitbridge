@@ -14,16 +14,16 @@ Everything on the wire is in **Roblox space**:
 | | Roblox (wire) | Blender |
 |---|---|---|
 | Up | +Y | +Z |
-| Character forward | -Z | -Y |
-| Character right | +X | -X |
+| Character forward | -Z | +Y |
+| Character right | +X | +X |
 | Units | 1 stud | 1 Blender unit (the addon keeps scene scale 1.0) |
 
 Blender to Roblox for positions and directions is `r = P · b` with
 
 ```
-P = [[-1, 0, 0],
-     [ 0, 0, 1],
-     [ 0, 1, 0]]       # P is a proper rotation (det +1) and its own inverse.
+P = [[1,  0, 0],
+     [0,  0, 1],
+     [0, -1, 0]]       # P is a proper rotation (det +1). Roblox to Blender is its transpose.
 ```
 
 - **Object frames and cameras:** `R_roblox = P · R_blender` (apply P to each basis column and to the position). Blender cameras and Roblox cameras both look down local -Z with local +Y up, so no extra local correction is needed.

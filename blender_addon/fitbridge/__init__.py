@@ -91,6 +91,7 @@ class FB_Thumb(bpy.types.PropertyGroup):
     pan_y: FloatProperty(name="Pan Y", default=0.0, step=5, precision=2, unit="LENGTH", update=_shot_changed,
                          description="Shift the picture up / down")
     pivot: FloatVectorProperty(size=3)
+    axes: IntProperty(default=0)     # geom.AXES this shot was framed under
 
 
 def _poll_mesh(self, ob):
@@ -524,7 +525,8 @@ def _restore_orbit():
 
 def _fix_scales():
     """files saved with a body scale that's no longer offered (Normal / Slender) go back to Classic; thumbnail cameras
-    stay hidden unless Thumbnail view is on"""
+    stay hidden unless Thumbnail view is on; mannequins built facing the old way get rebuilt"""
+    rig.refresh_old_axes(bpy.context)
     if not any(getattr(sc, "fitbridge", None) and sc.fitbridge.thumb_view for sc in bpy.data.scenes):
         thumb.show_cameras(False)
     for sc in bpy.data.scenes:

@@ -42,7 +42,7 @@ def draw_view():
     if res.get("scale") != context.scene.fitbridge.body_scale:
         return
     frame, size = res["box"]
-    corners = geom.box_corners(frame, size) @ geom.P.T                # Roblox world -> Blender world
+    corners = geom.box_corners(frame, size) @ geom.P                # Roblox world -> Blender world
     pts = [tuple(c) for c in corners]
     col = _colour(res)
     gpu.state.blend_set("ALPHA")
@@ -63,7 +63,7 @@ def draw_view():
         o = A[:3, 3]
         s = 0.15
         cross = [o + d for d in ((s, 0, 0), (-s, 0, 0), (0, s, 0), (0, -s, 0), (0, 0, s), (0, 0, -s))]
-        cross = [tuple(geom.P @ c) for c in cross]
+        cross = [tuple(geom.P.T @ c) for c in cross]
         ls.uniform_float("color", (1.0, 0.85, 0.2, 1.0))
         batch_for_shader(ls, "LINES", {"pos": cross}).draw(ls)
     gpu.state.blend_set("NONE")

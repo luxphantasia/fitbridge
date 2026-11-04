@@ -126,7 +126,7 @@ def expected_world(res, g):
     if H is None:
         return None
     L = local_matrix(g.turn, g.tilt, g.distance, (g.pan_x, g.pan_y), g.pivot)
-    return geom.swap(H @ L)
+    return geom.to_blender(H @ L)
 
 
 def target_world(res, g):
@@ -135,7 +135,7 @@ def target_world(res, g):
     d = _dir(g.turn, g.tilt)
     right, up = _basis(d)
     t = np.asarray(g.pivot, float) + right * g.pan_x + up * g.pan_y
-    return geom.P @ (H[:3, :3] @ t + H[:3, 3])
+    return geom.P.T @ (H[:3, :3] @ t + H[:3, 3])
 
 
 def aim_views(context, res, g):
@@ -161,7 +161,7 @@ def camera_cframe(res, g):
     H = handle_frame(res)
     cam = g.camera
     if cam is not None and cam.users_scene:
-        C = geom.unscaled(geom.swap(np.array(cam.matrix_world)))
+        C = geom.unscaled(geom.to_roblox(np.array(cam.matrix_world)))
         return geom.matrix_to_cframe(np.linalg.inv(H) @ C)
     return geom.matrix_to_cframe(local_matrix(g.turn, g.tilt, g.distance, (g.pan_x, g.pan_y), g.pivot))
 
@@ -194,11 +194,23 @@ def _close(a, b, tol=1e-4):
     return np.abs(np.asarray(a) - np.asarray(b)).max() < tol
 
 
+def _convert_old_axes(g):
+    """a shot framed when the character faced the other way in Blender: the accessory hasn't moved in Blender but has
+    turned 180 around its Handle in Roblox space, so turn the shot with it and the picture stays the same"""
+    if g.axes == geom.AXES:
+        return
+    if g.manual:
+        x, y, z = g.pivot
+        _set(g, (g.turn + 360.0) % 360.0 - 180.0, g.tilt, g.distance, (g.pan_x, g.pan_y), (-x, y, -z))
+    g.axes = geom.AXES
+
+
 def sync(context, res):
     """every tick: re-aim until you've moved it, follow the accessory, and pick up your own camera moves"""
     if res is None or res.get("A") is None:
         return
     g, ob = owner(context)
+    _convert_old_axes(g)
     H = handle_frame(res)
     key = f"{res['acc_type']}|{res['attachment']}|{res['scale']}"
     if not g.manual:
@@ -216,7 +228,7 @@ def sync(context, res):
     actual = np.array(cam.matrix_world)
     last = _last.get(cam.name)
     if last is not None and not _close(actual, last):          # you moved the camera (viewport or by hand)
-        L = np.linalg.inv(H) @ geom.unscaled(geom.swap(actual))
+        L = np.linalg.inv(H) @ geom.unscaled(geom.to_roblox(actual))
         turn, tilt, dist, pan = params_from_local(L, g.pivot)
         _set(g, turn, tilt, dist, pan)
         g.manual = True
@@ -395,7 +407,7 @@ def handle_circle(res):
     if res is None or res.get("fit") is None or res.get("A") is None:
         return None
     H = handle_frame(res)
-    return geom.P @ H[:3, 3], float(np.linalg.norm(res["fit"]["size"])) / 2
+    return geom.P.T @ H[:3, 3], float(np.linalg.norm(res["fit"]["size"])) / 2
 
 
 def preset(context, name):

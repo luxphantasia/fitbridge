@@ -96,8 +96,12 @@ if os.path.exists(shared) and json.load(open(shared)) != spec.SPEC:
     fail("blender_addon/fitbridge/ugc_spec.json is out of date: copy spec/ugc_spec.json over it")
 
 # --- geometry basics
-if not np.allclose(geom.P @ geom.P, np.eye(3)) or abs(np.linalg.det(geom.P) - 1) > 1e-9:
-    fail("P must be a rotation and its own inverse")
+if not np.allclose(geom.P @ geom.P.T, np.eye(3)) or abs(np.linalg.det(geom.P) - 1) > 1e-9:
+    fail("P must be a rotation")
+# the character faces +Y in Blender: Roblox forward is -Z, up is +Y, its right is +X
+if not (np.allclose(geom.P @ (0, 1, 0), (0, 0, -1)) and np.allclose(geom.P @ (0, 0, 1), (0, 1, 0))
+        and np.allclose(geom.P @ (1, 0, 0), (1, 0, 0))):
+    fail(f"Blender +Y must be the character's forward: {geom.P}")
 cf = [1, 2, 3, 0, -1, 0, 1, 0, 0, 0, 0, 1]
 if geom.matrix_to_cframe(geom.cframe_to_matrix(cf)) != [float(x) for x in cf]:
     fail("cframe round trip")
@@ -167,7 +171,7 @@ bm.free()
 me.uv_layers.new(name="UV")
 hat = bpy.data.objects.new("Hat", me)
 ctx.scene.collection.objects.link(hat)
-hat.location = (0.3, -0.2, 5.1)                          # Roblox: x -0.3, z -0.2 (in front), bottom 0.1 above head
+hat.location = (-0.3, 0.2, 5.1)                          # Roblox: x -0.3, z -0.2 (in front), bottom 0.1 above head
 ctx.view_layer.objects.active = hat
 hat.select_set(True)
 st.acc_type = "Hat"
@@ -376,7 +380,7 @@ def shot():
     r = evaluate.evaluate(ctx)
     thumb.sync(ctx, r)
     H = thumb.handle_frame(r)
-    return r, np.linalg.inv(H) @ geom.unscaled(geom.swap(np.array(g.camera.matrix_world)))
+    return r, np.linalg.inv(H) @ geom.unscaled(geom.to_roblox(np.array(g.camera.matrix_world)))
 
 
 st.thumb_view = True
@@ -404,7 +408,7 @@ st.acc_type = "Hat"
 res, L = shot()
 hat.location.x += 0.4
 res, L2 = shot()
-W1 = geom.swap(thumb.handle_frame(res)) @ L2
+W1 = geom.to_blender(thumb.handle_frame(res)) @ L2
 if not np.allclose(np.array(cam.matrix_world)[:3, 3], W1[:3, 3], atol=1e-5) or g.manual:
     fail("until you frame it, the default shot keeps framing the attachment area")
 hat.location.x -= 0.4
@@ -752,6 +756,30 @@ if code != 409 or "Update the other plugin" not in e["error"]:
     fail("protocol mismatch")
 server.state["protocol_mismatch"] = None
 done.append("live rules (real Studio shape) override limits + boxes, matched to 'Classic', 1024 textures, rigid_allowed; protocol mismatch -> 409")
+
+# --- files from when the character faced -Y: the shot keeps its picture, the mannequin is rebuilt facing +Y
+res = evaluate.evaluate(ctx)
+g_, _ob = thumb.owner(ctx)
+keep_shot = (g_.turn, g_.manual, g_.axes, tuple(g_.pivot))
+g_.manual, g_.axes = True, 0
+thumb._set(g_, 150.0, g_.tilt, g_.distance, (g_.pan_x, g_.pan_y), (0.1, 0.0, 0.2))
+thumb._convert_old_axes(g_)
+if abs(g_.turn + 30.0) > 1e-4 or not np.allclose(g_.pivot, (-0.1, 0, -0.2)) or g_.axes != geom.AXES:
+    fail(f"an old shot should turn 180: {g_.turn} {tuple(g_.pivot)} {g_.axes}")
+thumb._convert_old_axes(g_)
+if abs(g_.turn + 30.0) > 1e-4:
+    fail("the conversion must only happen once")
+thumb._set(g_, keep_shot[0], g_.tilt, g_.distance, (g_.pan_x, g_.pan_y), keep_shot[3])
+g_.manual, g_.axes = keep_shot[1], keep_shot[2]
+kind_ = rigmod.shown()
+coll_ = bpy.data.collections[rigmod.R15_COLL if kind_ == "R15" else rigmod.R6_COLL]
+names_ = sorted(o.name for o in coll_.objects)
+del coll_["fitbridge_axes"]
+rigmod.refresh_old_axes(ctx)
+coll_ = bpy.data.collections[rigmod.R15_COLL if kind_ == "R15" else rigmod.R6_COLL]
+if coll_.get("fitbridge_axes") != geom.AXES or sorted(o.name for o in coll_.objects) != names_ or rigmod.shown() != kind_:
+    fail("an old mannequin should be rebuilt as the same mannequin")
+done.append("old files: a framed shot turns 180 once and keeps its picture, the mannequin is rebuilt facing +Y")
 
 # --- the selected mesh is the accessory: one follows, several ask you to choose, none keeps the last
 keep_target, keep_name, keep_active = st.target, st.item_name, ctx.view_layer.objects.active
