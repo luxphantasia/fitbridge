@@ -8,6 +8,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import upload
+from .version import VERSION
 
 PROTOCOL = 1
 HOST = "127.0.0.1"
@@ -17,7 +18,7 @@ STUDIO_SESSION_GAP = 15.0      # a gap this long means a new Studio session (ask
 lock = threading.Lock()
 inbox = queue.Queue()
 state = {
-    "hello": {"app": "FitBridge Blender", "app_version": "0.4.6", "blender_version": "?"},
+    "hello": {"app": "FitBridge Blender", "app_version": VERSION, "blender_version": "?"},
     "package_revision": 0,
     "sent_revision": 0,
     "blobs": {},                # path -> JSON bytes (mesh, textures) of the last Send

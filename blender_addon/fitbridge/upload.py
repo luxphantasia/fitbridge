@@ -16,9 +16,10 @@ import zlib
 import numpy as np
 
 from . import spec
+from .version import VERSION
 
 API = os.environ.get("FITBRIDGE_ROBLOX_API", "https://apis.roblox.com")   # tests point this at a local fake
-USER_AGENT = "FitBridge-Blender/0.4.6"
+USER_AGENT = f"FitBridge-Blender/{VERSION}"
 POLL_EVERY = float(os.environ.get("FITBRIDGE_POLL_EVERY", "2.0"))
 POLL_FOR = 300.0
 
