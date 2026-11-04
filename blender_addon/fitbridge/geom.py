@@ -7,8 +7,10 @@ import math
 
 import numpy as np
 
-# Blender -> Roblox for positions and directions (docs/PROTOCOL.md). A proper rotation and its own inverse.
-P = np.array([[-1.0, 0, 0], [0, 0, 1.0], [0, 1.0, 0]])
+# Blender -> Roblox for positions and directions (docs/PROTOCOL.md): the character faces +Y in Blender. A rotation, so
+# Roblox -> Blender is its transpose.
+P = np.array([[1.0, 0, 0], [0, 0, 1.0], [0, -1.0, 0]])
+AXES = 2       # which way the character faces in Blender (1 = -Y, 2 = +Y): rigs and shots from an older one get converted
 P4 = np.eye(4)
 P4[:3, :3] = P
 
@@ -32,9 +34,14 @@ def translation(v):
     return m
 
 
-def swap(m):
-    """a frame between Blender and Roblox space (the same both ways: P is its own inverse); local axes unchanged"""
+def to_roblox(m):
+    """a frame from Blender to Roblox space; local axes unchanged"""
     return P4 @ np.asarray(m, float)
+
+
+def to_blender(m):
+    """a frame from Roblox to Blender space; local axes unchanged"""
+    return P4.T @ np.asarray(m, float)
 
 
 def unscaled(m):

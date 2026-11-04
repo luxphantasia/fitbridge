@@ -116,6 +116,7 @@ def spawn_r15(context, scale):
     coll = _collection(context, R15_COLL)
     coll["fitbridge_scale"] = scale
     coll["fitbridge_source"] = _source(data, scale)
+    coll["fitbridge_axes"] = geom.AXES
     _build_parts(coll, data["parts"], sharp=False)            # R15: no sharp edges, weighted normals only (Lux)
     return coll
 
@@ -132,7 +133,7 @@ def _build_parts(coll, parts, sharp=True):
         V, T = geom.part_mesh(p)
         V = _inset(V, _inset_for(p["name"]))
         C = geom.cframe_to_matrix(p["cframe"])
-        Vw = (V @ C[:3, :3].T + C[:3, 3]) @ geom.P.T
+        Vw = (V @ C[:3, :3].T + C[:3, 3]) @ geom.P
         _part_object(coll, p["name"], Vw, T, sharp)
 
 
@@ -141,6 +142,18 @@ def _inset(V, amount):
     c = (V.max(axis=0) + V.min(axis=0)) / 2
     half = np.maximum((V.max(axis=0) - V.min(axis=0)) / 2, 1e-9)
     return c + (V - c) * np.maximum(half - amount, half * 0.5) / half
+
+
+def refresh_old_axes(context):
+    """a mannequin built when the character faced the other way in Blender gets rebuilt"""
+    kind = shown()
+    coll = bpy.data.collections.get(R15_COLL if kind == "R15" else R6_COLL)
+    if coll is None or coll.get("fitbridge_axes") == geom.AXES:
+        return
+    if kind == "R15":
+        spawn_r15(context, coll.get("fitbridge_scale") or spec.OFFERED_SCALES[0])
+    else:
+        spawn_r6(context)
 
 
 def spawned_r15():
@@ -157,12 +170,13 @@ def spawn_r6(context):
     coll = _collection(context, R6_COLL)
     data = spec.cached_rig("R6")
     coll["fitbridge_source"] = _source(data, "R6")
+    coll["fitbridge_axes"] = geom.AXES
     if data is not None:
         _build_parts(coll, data["parts"])
         return coll
     for name, p in spec.SPEC["r6_preview"]["parts"].items():
         V, T = geom.box_mesh(p["size"])
-        Vw = (_inset(V, _inset_for(name)) + np.asarray(p["cframe"][:3], float)) @ geom.P.T
+        Vw = (_inset(V, _inset_for(name)) + np.asarray(p["cframe"][:3], float)) @ geom.P
         _part_object(coll, name, Vw, T)
     return coll
 
