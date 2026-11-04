@@ -158,6 +158,11 @@ class FB_Prefs(bpy.types.AddonPreferences):
                             description="Claude looks at the selected mesh and sets the type, attachment, name and "
                                         "thumbnail for you. Each new mesh sends 17 renders of it to Anthropic in two "
                                         "requests, billed to your API key")
+    auto_fit_check: BoolProperty(name="Check fit on R6 (experimental)", default=False,
+                                 update=lambda self, context: mark_dirty(),
+                                 description="Claude also looks at the item on the R6 character from every side and "
+                                             "holds back Send if it doesn't sit properly. Each new placement sends 5 "
+                                             "more renders to Anthropic, billed to your API key")
     claude_api_key: StringProperty(name="Anthropic API key", subtype="PASSWORD",
                                    description="For Auto mode. Stays on this computer: only sent to api.anthropic.com")
 
@@ -373,6 +378,16 @@ class FB_OT_auto_retry(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class FB_OT_auto_ignore(bpy.types.Operator):
+    bl_idname = "fitbridge.auto_ignore"
+    bl_label = "It's fine, allow it"
+    bl_description = "Claude can be wrong. You've looked and this is how you want it: stop objecting to it as it is now"
+
+    def execute(self, context):
+        auto.ignore(context)
+        return {"FINISHED"}
+
+
 class FB_OT_restart_server(bpy.types.Operator):
     bl_idname = "fitbridge.restart_server"
     bl_label = "Restart bridge"
@@ -414,6 +429,9 @@ class FB_PT_main(bpy.types.Panel):
             lay.label(text="Scene unit scale isn't 1.0 (1 unit = 1 stud)", icon="ERROR")
         if p is not None:
             lay.prop(p, "auto_mode")
+            row = lay.row()
+            row.enabled = p.auto_mode                          # the second switch needs the first
+            row.prop(p, "auto_fit_check")
         if auto.enabled():
             self._draw_auto(context, lay, res)
             self._draw_send(context, lay.box())
@@ -513,6 +531,8 @@ class FB_PT_main(bpy.types.Panel):
         if kind == "ready":
             _wrapped(context, box, line, "CHECKMARK")
             _wrapped(context, box, "Meets all the checks. Thumbnail is ready.", "CHECKMARK")
+            if auto.fit_on():
+                _wrapped(context, box, "Sits properly on the R6.", "CHECKMARK")
             for h in auto.heads_ups(res):
                 _wrapped(context, box, h, "ERROR")
         elif kind == "looking":
@@ -523,6 +543,8 @@ class FB_PT_main(bpy.types.Panel):
             _wrapped(context, col, line, "ERROR")
             if kind == "failed":
                 box.operator("fitbridge.auto_retry", icon="FILE_REFRESH")
+            elif kind in ("wrong_way", "misfit"):
+                box.operator("fitbridge.auto_ignore", icon="CHECKMARK")
 
     def _draw_send(self, context, box):
         row = box.row(align=True)
@@ -650,7 +672,7 @@ def _on_load(*_args):
 
 classes = (FB_Thumb, FB_Settings, FB_Prefs, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_thumb_preset, FB_OT_thumb_preview,
            FB_OT_send,
-           FB_OT_live_window, FB_OT_auto_retry, FB_OT_restart_server, FB_PT_main)
+           FB_OT_live_window, FB_OT_auto_retry, FB_OT_auto_ignore, FB_OT_restart_server, FB_PT_main)
 
 
 def register():

@@ -785,15 +785,17 @@ done.append("old files: a framed shot turns 180 once and keeps its picture, the 
 from types import SimpleNamespace  # noqa: E402
 from fitbridge import auto  # noqa: E402
 
-AI = {"posts": [], "reply": None, "second": None, "code": 200}
+AI = {"posts": [], "reply": None, "second": None, "fit": None, "code": 200}
 
 
 class FakeClaude(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers["Content-Length"])
         AI["posts"].append({"path": self.path, "headers": dict(self.headers), "body": json.loads(self.rfile.read(n))})
-        second = "accessory_type" not in AI["posts"][-1]["body"]["output_config"]["format"]["schema"]["properties"]
-        d = json.dumps(AI["second"] if second and AI["second"] is not None else AI["reply"]).encode()
+        fields = AI["posts"][-1]["body"]["output_config"]["format"]["schema"]["properties"]
+        second = "accessory_type" not in fields
+        chosen = AI["fit"] if "sits_properly" in fields else AI["second"] if second and AI["second"] is not None else AI["reply"]
+        d = json.dumps(chosen).encode()
         self.send_response(AI["code"])
         self.send_header("Content-Length", str(len(d)))
         self.end_headers()
@@ -807,14 +809,14 @@ _ai = ThreadingHTTPServer(("127.0.0.1", 0), FakeClaude)
 threading.Thread(target=_ai.serve_forever, daemon=True).start()
 auto.API = f"http://127.0.0.1:{_ai.server_address[1]}"
 auto.SETTLE = 0.0
-fake_prefs = SimpleNamespace(auto_mode=False, claude_api_key="")
+fake_prefs = SimpleNamespace(auto_mode=False, claude_api_key="", auto_fit_check=False)
 real_prefs = auto.prefs
 auto.prefs = lambda: fake_prefs
 
 
 def said(**over):
     d = {"accessory_type": "Face", "attachment": "FaceFrontAttachment", "name": "Test Mask",
-         "summary": "Mask, worn on the front of the face.", "shot": 3}
+         "summary": "Mask, worn on the front of the face.", "facing": "front", "shot": 3}
     d.update(over)
     return {"stop_reason": "end_turn", "content": [{"type": "thinking", "thinking": ""},
                                                    {"type": "text", "text": json.dumps(d)}]}
@@ -831,6 +833,7 @@ def settle(want, seconds=60):
     fail(f"Auto mode never reached {want}: {auto.status(ctx)}")
 
 
+rig_before_auto = rigmod.shown()
 keep_auto = (st.target, st.item_name, st.acc_type, st.attachment, ctx.view_layer.objects.active,
              list(ctx.view_layer.objects.selected))
 for o in keep_auto[5]:
@@ -961,8 +964,98 @@ AI["second"] = {"stop_reason": "end_turn", "content": [{"type": "text", "text": 
 if bpy.ops.fitbridge.auto_retry() != {"FINISHED"}:
     fail("Try again")
 settle(("ready", "blocked"))
+
+# backwards check: a turned item is held back, turning it clears that without asking again, and you can overrule it
+fitted = lambda ok, why="": {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps({"sits_properly": ok, "problem": why})}]}
+mask_me.vertices[1].co.x += 0.01
+mask_me.update()
+ctx.view_layer.update()
+AI["reply"] = said(facing="back")
+kind, line = settle(("wrong_way", "failed"))
+if kind != "wrong_way" or "backwards" not in line or bpy.ops.fitbridge.send.poll():
+    fail(f"a backwards item should be held back: {kind} {line}")
+posts_now = len(AI["posts"])
+mask.rotation_euler.z = math.pi
+ctx.view_layer.update()
+keep_z = mask.location.copy()
+for _i in range(3):
+    auto.tick(ctx)
+if auto.wrong_way(mask, auto.answer(mask)) is not None or len(AI["posts"]) != posts_now:
+    fail("turning it 180 should clear the warning without another request")
+mask.rotation_euler.z = math.pi / 2
+ctx.view_layer.update()
+if "turned to the character's" not in (auto.wrong_way(mask, auto.answer(mask)) or ""):
+    fail(f"a quarter turn should be called out: {auto.wrong_way(mask, auto.answer(mask))}")
+mask.rotation_euler.z = 0.0
+ctx.view_layer.update()
+settle(("wrong_way",))
+if bpy.ops.fitbridge.auto_ignore() != {"FINISHED"} or auto.wrong_way(mask, auto.answer(mask)) is not None:
+    fail("It's fine should stop the objection")
+mask_me.vertices[1].co.x += 0.01
+mask_me.update()
+ctx.view_layer.update()
+AI["reply"] = said(facing="unclear")
+settle(("ready", "blocked"))
+if auto.facing_now(mask, auto.answer(mask)) is not None:
+    fail("no clear front = nothing to object to")
+done.append("backwards check: a turned item is held back, rotating it clears that with no new request, you can overrule it, "
+            "an item with no clear front is left alone")
+
+# stage two: only with the first switch; on R6; every side with the body; a bad verdict holds Send; moving it asks again
+AI["fit"] = fitted(True)
+if auto.fit_on():
+    fail("off by default")
+fake_prefs.auto_fit_check = True
+fake_prefs.auto_mode = False
+if auto.fit_on():
+    fail("the second switch must do nothing without the first")
+fake_prefs.auto_mode = True
+n_before_fit = len(AI["posts"])
+end_fit = _time.time() + 60
+while len(AI["posts"]) == n_before_fit and _time.time() < end_fit:
+    auto.tick(ctx)
+    evaluate.evaluate(ctx)
+    _time.sleep(0.05)
+kind, line = settle(("ready", "misfit", "failed"))
+fit_post = AI["posts"][-1]["body"]
+if kind != "ready" or rigmod.shown() != "R6" or "sits_properly" not in fit_post["output_config"]["format"]["schema"]["properties"]:
+    fail(f"stage two: {kind} {line} {rigmod.shown()}")
+fit_imgs = [base64.b64decode(c["source"]["data"]) for c in fit_post["messages"][0]["content"] if c["type"] == "image"]
+if len(fit_imgs) != len(auto.FIT_ANGLES) or len(set(fit_imgs)) < 3:
+    fail(f"stage two needs a view from each side: {len(fit_imgs)}")
+c_, shots_, parts_ = auto.fit_shots(ctx, mask)
+if not parts_ or not all(p.get("fitbridge_rig") for p in parts_):
+    fail("the fit shots must include the body")
+if any(o.hide_render for o in parts_):
+    fail("rendering must put the rig back as it was")
+posts_now = len(AI["posts"])
+for _i in range(3):
+    auto.tick(ctx)
+if len(AI["posts"]) != posts_now:
+    fail("the same placement must not ask again")
+AI["fit"] = fitted(False, "Floating above the head: move it down.")
+mask.location.z += 0.02
+ctx.view_layer.update()
+kind, line = settle(("misfit", "failed"))
+if kind != "misfit" or "Floating" not in line or bpy.ops.fitbridge.send.poll() or len(AI["posts"]) != posts_now + 1:
+    fail(f"a bad fit should hold Send, with a new request: {kind} {line} {len(AI['posts'])}")
+if bpy.ops.fitbridge.auto_ignore() != {"FINISHED"} or auto.status(ctx)[0] != "ready":
+    fail("It's fine should let it through")
+AI["code"], AI["fit"] = 529, {"error": {}}
+mask.location.z -= 0.02
+ctx.view_layer.update()
+kind, line = settle(("failed",))
+if "busy" not in line or bpy.ops.fitbridge.send.poll():
+    fail(f"a failed fit check holds Send and says so: {kind} {line}")
+AI["code"] = 200
+fake_prefs.auto_fit_check = False
+done.append("stage two: needs the first switch, R6 from 5 sides with the body in shot, a bad verdict holds Send with Claude's "
+            "reason, you can overrule it, moving asks again, the same placement doesn't")
+
 fake_prefs.auto_mode = False
 auto.prefs = real_prefs
+if rig_before_auto == "R15":
+    rigmod.spawn_r15(ctx, st.body_scale)
 st.target, st.item_name, st.acc_type, st.attachment = keep_auto[0], keep_auto[1], keep_auto[2], keep_auto[3]
 ctx.view_layer.objects.active = keep_auto[4]
 bpy.data.objects.remove(mask)

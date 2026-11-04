@@ -6,6 +6,7 @@
 
 import base64
 import json
+import math
 import os
 import queue
 import threading
@@ -14,6 +15,8 @@ import urllib.error
 import urllib.request
 
 import bpy
+import numpy as np
+from mathutils import Vector
 
 from . import evaluate, geom, rig, spec, thumb
 from .version import VERSION
@@ -26,7 +29,12 @@ ANGLES = ((0, 5), (0, 25), (30, 10), (30, 30), (-30, 10), (-30, 30), (60, 15), (
           (0, 75))           # (turn, tilt) of the first set of candidates: every side, so it also shows what the item is
 NUDGES = ((0, 0), (-12, 0), (12, 0), (0, -10), (0, 10))    # the second set: small moves around the one it picked
 ANSWER_KEY = "fitbridge_auto"
-ANSWER_VERSION = 2   # older answers were a guessed angle, not a shot that was looked at: they get asked again
+ANSWER_VERSION = 3   # older answers have no thumbnail that was looked at, or no facing: they get asked again
+FIT_KEY = "fitbridge_auto_fit"
+IGNORE_FACING_KEY = "fitbridge_ignore_facing"
+IGNORE_FIT_KEY = "fitbridge_ignore_fit"
+FIT_ANGLES = ((0, 5), (90, 5), (-90, 5), (180, 5), (35, 25))  # the worn item from every side, with the body around it
+FACING = {"front": 0.0, "back": 180.0, "right": 90.0, "left": -90.0}    # where its front points, as a thumbnail turn
 SETTLE = 1.0         # seconds a changed mesh must hold still before it's worth a request
 
 _done = queue.Queue()
@@ -42,6 +50,12 @@ def prefs():
 def enabled():
     p = prefs()
     return bool(p and p.auto_mode)
+
+
+def fit_on():
+    """the second switch only counts with the first"""
+    p = prefs()
+    return enabled() and bool(p.auto_fit_check)
 
 
 def fingerprint(ob):
@@ -67,10 +81,11 @@ def answer(ob):
 def _schema():
     attachments = sorted({k for t in spec.RIGID_TYPES for k, _label in spec.attachments_for(t)})
     return {"type": "object", "additionalProperties": False,
-            "required": ["accessory_type", "attachment", "name", "summary", "shot"],
+            "required": ["accessory_type", "attachment", "name", "summary", "facing", "shot"],
             "properties": {"accessory_type": {"type": "string", "enum": list(spec.RIGID_TYPES)},
                            "attachment": {"type": "string", "enum": attachments},
                            "name": {"type": "string"}, "summary": {"type": "string"},
+                           "facing": {"type": "string", "enum": [*FACING, "unclear"]},
                            "shot": {"type": "integer"}}}
 
 
@@ -84,7 +99,8 @@ def _prompt_first(ob):
                         for t in spec.RIGID_TYPES)
     x, y, z = ob.dimensions
     return f"""These numbered shots show one rigid accessory for a Roblox avatar from many angles, each exactly as it \
-would appear as its marketplace thumbnail. Its size is {x:.2f} wide, {y:.2f} deep, {z:.2f} tall, in studs. The mesh may \
+would appear as its marketplace thumbnail. Each shot gives its camera angle. Someone wearing the item as it's placed \
+here would look toward the camera at turn 0, their right is toward positive turn, and turn 180 is behind them. Its size is {x:.2f} wide, {y:.2f} deep, {z:.2f} tall, in studs. The mesh may \
 have been modelled facing any way, so judge what it is from how it looks.
 
 Accessory types and their attachment points:
@@ -94,6 +110,9 @@ Decide:
 - accessory_type and attachment: what this item is and where it's worn. The attachment must belong to the type.
 - name: a short marketplace title of at most 50 characters, describing the item plainly.
 - summary: one short plain sentence saying what it is and where it goes, like "Hat, worn on top of the head."
+- facing: where the item's own front points, as placed in these shots: "front" if it points the way the wearer looks, \
+"back", "right" or "left" (the wearer's) if it's turned that way, or "unclear" if the item has no obvious front. Judge \
+this from features with a clear front, like goggles, a peak or a logo.
 - shot: the number of the best thumbnail. {THUMBNAIL_BAR}"""
 
 
@@ -102,10 +121,28 @@ def _prompt_refine():
 finished thumbnail and give the number of the best in `shot`. {THUMBNAIL_BAR}"""
 
 
+def _prompt_fit():
+    return """These shots show a rigid accessory worn on a Roblox R6 character, a plain grey blocky figure with no face. \
+Each shot gives its camera angle: the character looks toward the camera at turn 0, its right is toward positive turn, and \
+turn 180 is behind it.
+
+Judge whether the accessory sits properly, the way a player would expect it to look when worn. Look for: a visible gap \
+where it floats off the body, sinking too far into the body, sitting on the wrong part, being off-centre or crooked when \
+it shouldn't be, being far too big or too small for the character, and pointing the wrong way. A worn item overlapping the \
+body where it wraps around it is normal.
+
+Answer with sits_properly, and in problem one short plain sentence saying what's wrong and which way to move, turn or \
+scale it, like "Floating above the head: move it down." Leave problem empty if it sits properly."""
+
+
+FIT_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["sits_properly", "problem"],
+              "properties": {"sits_properly": {"type": "boolean"}, "problem": {"type": "string"}}}
+
+
 def _body(shots, pngs, prompt, schema):
     content = []
     for i, png in enumerate(pngs):
-        content.append({"type": "text", "text": f"Shot {i + 1}:"})
+        content.append({"type": "text", "text": f"Shot {i + 1} (turn {shots[i][0]:g}, tilt {shots[i][1]:g}):"})
         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/png",
                                                     "data": base64.b64encode(png).decode()}})
     content.append({"type": "text", "text": prompt})
@@ -189,7 +226,7 @@ def _settings(d):
         raise ValueError(f"Claude chose a type FitBridge doesn't have: {t}")
     options = [k for k, _label in spec.attachments_for(t)]
     return {"type": t, "attachment": d["attachment"] if d["attachment"] in options else options[0],
-            "name": str(d["name"]).strip()[:50], "summary": str(d["summary"]).strip()}
+            "name": str(d["name"]).strip()[:50], "summary": str(d["summary"]).strip(), "facing": FACING.get(d["facing"])}
 
 
 def _store(name, fp, settings, shot):
@@ -197,12 +234,119 @@ def _store(name, fp, settings, shot):
     if ob is not None:
         turn, tilt, distance, pan = shot
         ob[ANSWER_KEY] = json.dumps({"version": ANSWER_VERSION, "fingerprint": fp, **settings, "turn": turn, "tilt": tilt,
-                                     "distance": distance, "pan": list(pan)})
+                                     "distance": distance, "pan": list(pan), "yaw": _yaw(ob)})
+
+
+def _yaw(ob):
+    """how far ob is turned around the vertical, in degrees (counter-clockwise from above, 0 = as modelled)"""
+    y = ob.matrix_world.col[1]
+    return math.degrees(math.atan2(-y.x, y.y))
+
+
+def facing_now(ob, d):
+    """where ob's front points now as a thumbnail turn (0 = the way the wearer looks), or None if it has no clear front.
+    Turning the object is the fix, and that doesn't change the mesh, so this follows the object without asking again."""
+    if d.get("facing") is None:
+        return None
+    return (d["facing"] - (_yaw(ob) - d["yaw"]) + 180.0) % 360.0 - 180.0
+
+
+def wrong_way(ob, d):
+    """a sentence if the item points the wrong way and you haven't said it's fine, else None"""
+    t = facing_now(ob, d)
+    if t is None or abs(t) <= 45.0 or ob.get(IGNORE_FACING_KEY) == d["fingerprint"]:
+        return None
+    if abs(t) > 135.0:
+        return "This looks like it faces backwards. Turn it 180 degrees around Z."
+    side = "right" if t > 0 else "left"
+    return f"This looks turned to the character's {side}. Turn it {round(t / 5) * 5:+d} degrees around Z."
+
+
+def fit_key(ob, fp):
+    """what a fit verdict is about: the mesh, exactly where it is, and which body"""
+    place = [round(x, 3) for row in ob.matrix_world for x in row]
+    return json.dumps([fp, place, ob.fitbridge_thumb.key, rig.shown()])
+
+
+def fit_verdict(ob, key):
+    try:
+        v = json.loads(ob.get(FIT_KEY, ""))
+    except ValueError:
+        return None
+    return v if v.get("key") == key else None
+
+
+def _fit_parts(ob):
+    """the body parts around the item, so the shots are close enough to judge; all of them if it touches none"""
+    coll = bpy.data.collections.get(rig.R6_COLL) or bpy.data.collections.get(rig.R15_COLL)
+    parts = list(coll.objects) if coll else []
+    a = np.array([ob.matrix_world @ Vector(c) for c in ob.bound_box])
+    margin = max(float((a.max(axis=0) - a.min(axis=0)).max()) * 0.2, 0.1)
+    near = []
+    for part in parts:
+        b = np.array([part.matrix_world @ Vector(c) for c in part.bound_box])
+        if (b.max(axis=0) >= a.min(axis=0) - margin).all() and (b.min(axis=0) <= a.max(axis=0) + margin).all():
+            near.append(part)
+    return near or parts
+
+
+def _world_verts(part):
+    n = len(part.data.vertices)
+    co = np.empty(n * 3, np.float32)
+    part.data.vertices.foreach_get("co", co)
+    m = np.array(part.matrix_world)
+    return co.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3]
+
+
+def fit_shots(context, ob):
+    """(centre, shots, parts) for the fit check: the item and the body around it, filling the frame from each side"""
+    parts = _fit_parts(ob)
+    _c, item_r = thumb.centred_verts(context, ob)
+    item = item_r @ geom.P + _c
+    pts = np.concatenate([item, *[_world_verts(p) for p in parts]]) if parts else item
+    centre = (pts.min(axis=0) + pts.max(axis=0)) / 2
+    V = (pts - centre) @ geom.P.T
+    return centre, [(t, ti, *thumb.frame_shot(V, t, ti)) for t, ti in FIT_ANGLES], parts
+
+
+def _start_fit(context, ob, key, api_key):
+    _run.update(busy=key, failed=None, message="")
+    try:
+        centre, shots, parts = fit_shots(context, ob)
+        pngs = thumb.render_shots(context, ob, centre, shots, SHOT_SIZE, also=parts, background=(0.13, 0.17, 0.24))
+        body = _body(shots, pngs, _prompt_fit(), FIT_SCHEMA)
+        threading.Thread(target=_worker, args=("fit", ob.name, key, api_key, body), daemon=True).start()
+    except Exception as e:
+        _run.update(busy=None, failed=key, message=f"Couldn't render the item on the character: {e}")
+
+
+def _check_fit(context, ob, fp, d):
+    """the item is decided and passes the checks: ask how it looks on the body, once it has stopped moving"""
+    res = evaluate.LIVE["result"]
+    if res is None or res.get("object") != ob.name or res.get("fit") is None or not res["ok"] or wrong_way(ob, d):
+        return
+    key = fit_key(ob, fp)
+    if fit_verdict(ob, key) is not None:
+        return
+    if _run["seen"] != key:
+        _run.update(seen=key, since=time.time())
+    p = prefs()
+    if _run["busy"] or _run["failed"] == key or not p.claude_api_key or time.time() - _run["since"] < SETTLE:
+        return
+    _start_fit(context, ob, key, p.claude_api_key)
 
 
 def _finished(context, stage, name, fp, d, error):
     """a reply came back. After the first, look closer around the shot it picked; a failed second look isn't worth losing
     the first one's answer over."""
+    if stage == "fit":
+        if error:
+            raise ValueError(error)
+        ob = bpy.data.objects.get(name)
+        if ob is not None:
+            ob[FIT_KEY] = json.dumps({"key": fp, "ok": bool(d["sits_properly"]), "problem": str(d["problem"]).strip()})
+        _run["busy"] = None
+        return
     if stage == "refine":
         best = _run["shots"][0] if error else _picked(d)
         _store(name, fp, _run["settings"], best)
@@ -265,6 +409,13 @@ def tick(context):
         if _run["applied"] != (ob.name, fp):
             _apply(context, ob, d)
             _run["applied"] = (ob.name, fp)
+        if fit_on():
+            if rig.shown() != "R6":
+                from . import _ask_for_rig
+                _ask_for_rig("R6")
+                rig.spawn_r6(context)
+                evaluate.mark_changed()
+            _check_fit(context, ob, fp, d)
         return
     if _run["seen"] != fp:
         _run.update(seen=fp, since=time.time())
@@ -281,7 +432,7 @@ def retry():
 # --------------------------------------------------------------------------------------------------------- the panel
 
 def status(context):
-    """what the panel says: (kind, line), kind = problem / no_key / looking / failed / blocked / ready"""
+    """what the panel says: (kind, line), kind = problem / no_key / looking / failed / blocked / wrong_way / misfit / ready"""
     problem = evaluate.selection_problem(context)
     if problem:
         return "problem", problem
@@ -297,10 +448,35 @@ def status(context):
     res = evaluate.LIVE["result"]
     if _run["applied"] != (ob.name, fingerprint(ob)) or res is None or res.get("object") != ob.name:
         return "looking", "Setting it up..."
+    way = wrong_way(ob, d)
+    if way:
+        return "wrong_way", way
     if res.get("fit") is None or not res["ok"]:
         bad = [c["message"] for c in res["checks"] if c["status"] == "fail"]
         return "blocked", bad[0] if bad else "It doesn't meet the checks yet"
+    if fit_on():
+        key = fit_key(ob, fingerprint(ob))
+        v = fit_verdict(ob, key)
+        if v is None:
+            if _run["failed"] == key:
+                return "failed", _run["message"]
+            if not p.claude_api_key:
+                return "no_key", "Add your Anthropic API key in FitBridge's preferences"
+            return "looking", "Checking how it sits on the character..."
+        if not v["ok"] and ob.get(IGNORE_FIT_KEY) != key:
+            return "misfit", v["problem"] or "It doesn't look like it sits properly on the character"
     return "ready", d["summary"]
+
+
+def ignore(context):
+    """you've looked and it's fine: stop objecting to this item's current facing and placement"""
+    ob = context.scene.fitbridge.target
+    fp = fingerprint(ob)
+    kind = status(context)[0]
+    if kind == "wrong_way":
+        ob[IGNORE_FACING_KEY] = fp
+    elif kind == "misfit":
+        ob[IGNORE_FIT_KEY] = fit_key(ob, fp)
 
 
 def heads_ups(res):
