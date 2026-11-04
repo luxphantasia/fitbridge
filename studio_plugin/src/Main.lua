@@ -130,7 +130,7 @@ local function activeRules(manifest)
 	local typeSpec = SPEC.accessory_types[manifest.accessory_type]
 	local rules = {
 		maxTriangles = SPEC.limits.max_triangles,
-		maxTextureSize = SPEC.limits.max_texture_size,
+		maxTextureSize = Geometry.textureLimit(manifest.pbr, SPEC.limits.texture_size_on_send),
 		source = "bundled spec",
 	}
 	local size, offset = nil, nil
@@ -141,7 +141,14 @@ local function activeRules(manifest)
 	if live and typeSpec then
 		pcall(function()
 			rules.maxTriangles = live.MeshRules.AccessoryMaxTriangles or rules.maxTriangles
-			rules.maxTextureSize = live.TextureRules.MaxTextureSize or rules.maxTextureSize
+			local assetLimits = live.TextureRules.AssetTextureLimits
+			local assetLimit = assetLimits and assetLimits[Enum.AssetType[typeSpec.asset_type]]
+			rules.maxTextureSize = Geometry.textureLimit(
+				manifest.pbr,
+				SPEC.limits.texture_size_on_send,
+				live.TextureRules.MaxTextureSize,
+				assetLimit and assetLimit.ColorMapSize
+			)
 			local info = live.AccessoryRules[Enum.AssetType[typeSpec.asset_type]]
 			for _, a in info.Attachments do
 				if a.Name == manifest.attachment then
@@ -170,6 +177,17 @@ local function sendRules()
 		end
 		accessories[assetType.Name] = { rigid_allowed = info.RigidAllowed, attachments = atts }
 	end
+	-- The smallest colour map limit of any accessory type, for SurfaceAppearance textures.
+	local maxPbr = nil
+	local assetLimits = live.TextureRules and live.TextureRules.AssetTextureLimits
+	if assetLimits then
+		for _, typeSpec in SPEC.accessory_types do
+			local limit = assetLimits[Enum.AssetType[typeSpec.asset_type]]
+			if limit and limit.ColorMapSize then
+				maxPbr = math.min(maxPbr or limit.ColorMapSize, limit.ColorMapSize)
+			end
+		end
+	end
 	local _, err = request("POST", "/v1/rules", {
 		protocol = PROTOCOL,
 		fetched = DateTime.now():ToIsoDate(),
@@ -177,6 +195,7 @@ local function sendRules()
 		limits = {
 			max_triangles = live.MeshRules and live.MeshRules.AccessoryMaxTriangles,
 			max_texture_size = live.TextureRules and live.TextureRules.MaxTextureSize,
+			max_pbr_texture_size = maxPbr,
 		},
 		accessories = accessories,
 		raw = toJson(live),

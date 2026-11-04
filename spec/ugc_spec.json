@@ -12,6 +12,7 @@
   "limits": {
     "max_triangles": 4000,
     "max_texture_size": 2048,
+    "texture_size_on_send": { "color_only": 1024, "pbr": 2048 },
     "mesh_center_tolerance": 0.01
   },
 
