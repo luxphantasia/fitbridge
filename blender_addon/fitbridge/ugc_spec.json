@@ -12,7 +12,6 @@
   "limits": {
     "max_triangles": 4000,
     "max_texture_size": 2048,
-    "editable_image_max_size": 1024,
     "mesh_center_tolerance": 0.01
   },
 

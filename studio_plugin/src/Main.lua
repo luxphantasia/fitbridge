@@ -465,27 +465,22 @@ local function textureAssetId(manifest, map, info)
 	if cached then
 		return cached, nil
 	end
-	local maxEditable = SPEC.limits.editable_image_max_size
 	local tex, err = request("GET", "/v1/package/texture/" .. map)
 	if not tex then
 		return nil, err
-	end
-	if tex.width > maxEditable or tex.height > maxEditable then
-		return nil,
-			("%s is %d×%d; Studio can only upload up to %d×%d from a plugin. Import %s with the 3D Importer and set it by hand."):format(
-				map,
-				tex.width,
-				tex.height,
-				maxEditable,
-				maxEditable,
-				tostring(tex.png_path)
-			)
 	end
 	local okImg, img = pcall(function()
 		return AssetService:CreateEditableImage({ Size = Vector2.new(tex.width, tex.height) })
 	end)
 	if not okImg or not img then
-		return nil, "Couldn't create an image for " .. map .. ": " .. tostring(img)
+		return nil,
+			("Couldn't create a %d×%d image for %s, so it won't show: %s. Import %s with the 3D Importer and set it by hand."):format(
+				tex.width,
+				tex.height,
+				map,
+				tostring(img),
+				tostring(tex.png_path)
+			)
 	end
 	img:WritePixelsBuffer(Vector2.zero, img.Size, Geometry.base64ToBuffer(tex.rgba_base64))
 	local id, upErr = upload(img, Enum.AssetType.Image, manifest.name .. " " .. map)
@@ -696,7 +691,11 @@ local function build(manifest)
 				if deg == 180 then " (Roblox's importer turned it 180°; compensated)" else ""
 			)
 		else
-			uploadNote = "Couldn't load uploaded model " .. tostring(upload.model_asset_id) .. ": " .. tostring(loadErr)
+			uploadNote = if string.find(tostring(loadErr), "not authorized", 1, true)
+				then ("This place isn't allowed to load model %s, so this is only a preview. To submit it, build it in a new place (File > New)."):format(
+					tostring(upload.model_asset_id)
+				)
+				else "Couldn't load uploaded model " .. tostring(upload.model_asset_id) .. ": " .. tostring(loadErr)
 		end
 	elseif upload and upload.state == "failed" then
 		uploadNote = "Upload failed: " .. tostring(upload.message)
@@ -718,7 +717,7 @@ local function build(manifest)
 				else
 					pluginUploaded = false
 					textureMaps[map] = previewImage
-					if not uploadNote then
+					if not uploadNote or not previewImage then
 						table.insert(problems, texErr)
 					end
 				end
