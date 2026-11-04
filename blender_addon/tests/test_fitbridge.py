@@ -752,6 +752,52 @@ if code != 409 or "Update the other plugin" not in e["error"]:
 server.state["protocol_mismatch"] = None
 done.append("live rules (real Studio shape) override limits + boxes, matched to 'Classic', 1024 textures, rigid_allowed; protocol mismatch -> 409")
 
+# --- moving on to another accessory: a hidden pick gives way to the selected mesh, each item keeps its own name
+keep_target, keep_name, keep_active = st.target, st.item_name, ctx.view_layer.objects.active
+first = bpy.data.objects.new("FirstItem", hat.data)
+second = bpy.data.objects.new("SecondItem", hat.data)
+ctx.scene.collection.objects.link(first)
+ctx.scene.collection.objects.link(second)
+st.target = first
+st.item_name = "First name"
+second.select_set(True)
+ctx.view_layer.objects.active = second
+ctx.view_layer.update()
+if evaluate.selected_other(ctx) is not second:
+    fail("a selected mesh that isn't the pick should be offered")
+evaluate.follow_current(ctx)
+if st.target is not first:
+    fail("a visible pick stays when something else is selected (e.g. selecting the rig or a reference)")
+first.hide_set(True)
+second.select_set(False)
+evaluate.follow_current(ctx)
+if st.target is not first:
+    fail("a hidden pick with nothing else selected stays")
+second.select_set(True)
+evaluate.follow_current(ctx)
+if st.target is not second or st.item_name != "":
+    fail(f"hiding the pick moves on to the selected mesh, without the old name: {st.target} '{st.item_name}'")
+st.item_name = "Second name"
+if evaluate.selected_other(ctx) is not None:
+    fail("nothing to offer when the selected mesh is the pick")
+first.hide_set(False)
+st.target = first
+if st.item_name != "First name":
+    fail(f"going back should bring the first item's name back: '{st.item_name}'")
+first.select_set(True)
+ctx.view_layer.objects.active = second
+second.select_set(True)
+with ctx.temp_override(scene=ctx.scene, view_layer=ctx.view_layer):
+    if bpy.ops.fitbridge.use_selected() != {"FINISHED"} or st.target is not second or st.item_name != "Second name":
+        fail("Use selected should switch to the selected mesh and its name")
+st.target = keep_target
+st.item_name = keep_name
+ctx.view_layer.objects.active = keep_active
+for o in (first, second):
+    bpy.data.objects.remove(o)
+done.append("hiding the picked mesh moves on to the selected one, a visible pick stays and offers "
+            "Use selected, each item keeps its own Studio name")
+
 head = {"name": "Head", "size": [1.2, 1.2, 1.2], "cframe": [0, 4.6, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
         "mesh": {"positions": [-0.6, -0.6, -0.6, 0.6, -0.6, -0.6, 0, 0.6, 0, 0, -0.6, 0.6], "triangles": [0, 1, 2, 0, 2, 3, 0, 3, 1, 1, 3, 2]}}
 code, _ = post("/v1/rig", {"protocol": 1, "rig_version": spec.RIG_VERSION, "body_scale": "Classic", "parts": [head],

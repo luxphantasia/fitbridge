@@ -28,6 +28,24 @@ def target_object(context):
     return None
 
 
+def selected_other(context):
+    """the selected active mesh when it isn't the picked one, else None"""
+    st = context.scene.fitbridge
+    ob = context.view_layer.objects.active
+    if ob is None or ob is st.target or ob.type != "MESH" or ob.get("fitbridge_rig"):
+        return None
+    return ob if ob.select_get() and ob.visible_get() else None
+
+
+def follow_current(context):
+    """a picked mesh you've hidden isn't the one you're working on: move on to the selected one"""
+    st = context.scene.fitbridge
+    if st.target is not None and not st.target.visible_get():
+        other = selected_other(context)
+        if other is not None:
+            st.target = other
+
+
 def read_mesh(ob, depsgraph):
     """the evaluated mesh as plain arrays (world space, Blender axes), triangulated, only vertices used by faces"""
     ev = ob.evaluated_get(depsgraph)
