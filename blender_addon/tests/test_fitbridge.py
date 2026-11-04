@@ -781,6 +781,173 @@ if coll_.get("fitbridge_axes") != geom.AXES or sorted(o.name for o in coll_.obje
     fail("an old mannequin should be rebuilt as the same mannequin")
 done.append("old files: a framed shot turns 180 once and keeps its picture, the mannequin is rebuilt facing +Y")
 
+# --- Auto mode (fake Anthropic): renders go up, the answer sets everything, one request per mesh, checks still decide
+from types import SimpleNamespace  # noqa: E402
+from fitbridge import auto  # noqa: E402
+
+AI = {"posts": [], "reply": None, "code": 200}
+
+
+class FakeClaude(BaseHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers["Content-Length"])
+        AI["posts"].append({"path": self.path, "headers": dict(self.headers), "body": json.loads(self.rfile.read(n))})
+        d = json.dumps(AI["reply"]).encode()
+        self.send_response(AI["code"])
+        self.send_header("Content-Length", str(len(d)))
+        self.end_headers()
+        self.wfile.write(d)
+
+    def log_message(self, *a):
+        pass
+
+
+_ai = ThreadingHTTPServer(("127.0.0.1", 0), FakeClaude)
+threading.Thread(target=_ai.serve_forever, daemon=True).start()
+auto.API = f"http://127.0.0.1:{_ai.server_address[1]}"
+auto.SETTLE = 0.0
+fake_prefs = SimpleNamespace(auto_mode=False, claude_api_key="")
+real_prefs = auto.prefs
+auto.prefs = lambda: fake_prefs
+
+
+def said(**over):
+    d = {"accessory_type": "Face", "attachment": "FaceFrontAttachment", "name": "Test Mask",
+         "summary": "Mask, worn on the front of the face.", "thumbnail_turn": 20.0, "thumbnail_tilt": 12.0}
+    d.update(over)
+    return {"stop_reason": "end_turn", "content": [{"type": "thinking", "thinking": ""},
+                                                   {"type": "text", "text": json.dumps(d)}]}
+
+
+def settle(want, seconds=60):
+    end = _time.time() + seconds
+    while _time.time() < end:
+        auto.tick(ctx)
+        evaluate.evaluate(ctx)
+        if auto.status(ctx)[0] in want:
+            return auto.status(ctx)
+        _time.sleep(0.05)
+    fail(f"Auto mode never reached {want}: {auto.status(ctx)}")
+
+
+keep_auto = (st.target, st.item_name, st.acc_type, st.attachment, ctx.view_layer.objects.active,
+             list(ctx.view_layer.objects.selected))
+for o in keep_auto[5]:
+    o.select_set(False)
+mask_me = bpy.data.meshes.new("Mask")
+mask_me.from_pydata([(-.2, 0, 5.1), (.2, 0, 5.1), (.2, 0, 5.4), (-.2, 0, 5.4)], [], [(0, 1, 2, 3)])
+mask = bpy.data.objects.new("Mask", mask_me)
+ctx.scene.collection.objects.link(mask)
+mask.select_set(True)
+ctx.view_layer.objects.active = mask
+ctx.view_layer.update()
+st.target, st.item_name = None, ""
+if auto.enabled() or evaluate.auto_on():
+    fail("Auto mode is off by default")
+auto.tick(ctx)
+if AI["posts"]:
+    fail("with the switch off nothing may go to Anthropic")
+fake_prefs.auto_mode = True
+auto.tick(ctx)
+if auto.status(ctx)[0] != "no_key" or AI["posts"]:
+    fail(f"no key: say so, send nothing: {auto.status(ctx)}")
+st.override = True
+if bpy.ops.fitbridge.send.poll():
+    fail("in Auto mode Override must not open Send")
+st.override = False
+fake_prefs.claude_api_key = "test-claude-key"
+AI["reply"] = said()
+kind, line = settle(("ready", "blocked", "failed"))
+if kind != "ready" or line != "Mask, worn on the front of the face.":
+    fail(f"Auto mode should end ready: {kind} {line}")
+if len(AI["posts"]) != 1:
+    fail(f"one request per mesh: {len(AI['posts'])}")
+ai_post = AI["posts"][0]
+content = ai_post["body"]["messages"][0]["content"]
+pngs = [base64.b64decode(c["source"]["data"]) for c in content if c["type"] == "image"]
+if ai_post["path"] != "/v1/messages" or ai_post["body"]["model"] != "claude-opus-5-5" or len(pngs) != len(auto.VIEWS) or \
+        any(not p.startswith(b"\x89PNG") for p in pngs) or len(set(pngs)) < 3:
+    fail(f"the request should carry {len(auto.VIEWS)} different PNG views: {post['path']} {len(pngs)}")
+sent_headers = {k.lower(): v for k, v in ai_post["headers"].items()}
+if sent_headers.get("x-api-key") != "test-claude-key" or "test-claude-key" in json.dumps(ai_post["body"]) or \
+        not sent_headers.get("anthropic-version") or sent_headers.get("anthropic-beta") != "server-side-fallback-2026-07-01":
+    fail("the key goes only in x-api-key")
+for k in ai_post["body"]["output_config"]["format"]["schema"]["properties"]:
+    if k not in ai_post["body"]["output_config"]["format"]["schema"]["required"]:
+        fail(f"schema field {k} should be required")
+g_ = mask.fitbridge_thumb
+if (st.acc_type, st.attachment, st.item_name, st.target) != ("Face", "FaceFrontAttachment", "Test Mask", mask) or \
+        abs(g_.turn - 20) > 1e-3 or abs(g_.tilt - 12) > 1e-3 or not g_.manual:
+    fail(f"the answer should set everything: {st.acc_type} {st.attachment} '{st.item_name}' {g_.turn} {g_.tilt}")
+if not rigmod.shown():
+    fail("Auto mode needs a mannequin to check against")
+if ctx.scene.camera is not None and ctx.scene.camera.name.startswith("FitBridge Auto") or "FitBridge Auto" in bpy.data.objects:
+    fail("the temporary camera must be gone")
+if not auto.heads_ups(evaluate.LIVE["result"]):
+    fail("an open mesh should still show its heads-up")
+if not bpy.ops.fitbridge.send.poll():
+    fail("ready = Send on")
+for _i in range(3):
+    auto.tick(ctx)
+mask.location.x += 0.001
+ctx.view_layer.update()
+auto.tick(ctx)
+if len(AI["posts"]) != 1:
+    fail("moving the object must not cost another request")
+mask.location.x -= 0.001
+# the checks still decide: too high = blocked, however confident the answer
+mask.location.z += 3.0
+ctx.view_layer.update()
+kind, line = settle(("blocked",))
+if bpy.ops.fitbridge.send.poll():
+    fail("a failing check must block Send in Auto mode")
+mask.location.z -= 3.0
+ctx.view_layer.update()
+# a changed mesh asks again; a nonsense attachment falls back to the type's own; a failure is said once, not repeated
+mask_me.vertices[0].co.x -= 0.05
+mask_me.update()
+ctx.view_layer.update()
+AI["reply"] = said(accessory_type="Hat", attachment="BodyBackAttachment", thumbnail_turn=999.0, name="N" * 80)
+st.item_name = ""
+settle(("ready", "blocked"))
+if len(AI["posts"]) != 2 or st.acc_type != "Hat" or st.attachment != "HatAttachment" or mask_me.vertices is None or \
+        abs(g_.turn - 180) > 1e-3 or len(st.item_name) != 50:
+    fail(f"second answer: {len(AI['posts'])} {st.acc_type} {st.attachment} {g_.turn} {len(st.item_name)}")
+for code, reply, words in ((401, {"error": {}}, "API key"), (529, {"error": {}}, "busy"),
+                           (200, {"stop_reason": "refusal", "content": []}, "declined"),
+                           (200, {"stop_reason": "max_tokens", "content": []}, "cut off"),
+                           (200, {"stop_reason": "end_turn", "content": [{"type": "text", "text": "not json"}]}, "")):
+    mask_me.vertices[1].co.x += 0.01
+    mask_me.update()
+    ctx.view_layer.update()
+    AI["code"], AI["reply"] = code, reply
+    n_before = len(AI["posts"])
+    kind, line = settle(("failed",))
+    if words not in line or "test-claude-key" in line:
+        fail(f"failure {code}: {line}")
+    for _i in range(5):
+        auto.tick(ctx)
+        _time.sleep(0.02)
+    if len(AI["posts"]) != n_before + 1:
+        fail("a failure must not keep asking")
+    if bpy.ops.fitbridge.send.poll():
+        fail("no answer = Send off")
+AI["code"], AI["reply"] = 200, said()
+if bpy.ops.fitbridge.auto_retry() != {"FINISHED"}:
+    fail("Try again")
+settle(("ready", "blocked"))
+fake_prefs.auto_mode = False
+auto.prefs = real_prefs
+st.target, st.item_name, st.acc_type, st.attachment = keep_auto[0], keep_auto[1], keep_auto[2], keep_auto[3]
+ctx.view_layer.objects.active = keep_auto[4]
+bpy.data.objects.remove(mask)
+for o in keep_auto[5]:
+    o.select_set(True)
+_ai.shutdown()
+done.append("Auto mode (fake Anthropic): off = nothing sent, no key = says so, 5 PNG views + key only in the header, answer "
+            "sets type / attachment / name / shot, one request per mesh, moving doesn't re-ask, checks and Override can't be "
+            "got around, bad answers corrected, each failure said once")
+
 # --- the selected mesh is the accessory: one follows, several ask you to choose, none keeps the last
 keep_target, keep_name, keep_active = st.target, st.item_name, ctx.view_layer.objects.active
 keep_sel = list(ctx.view_layer.objects.selected)
