@@ -454,7 +454,7 @@ def preview(context):
     from .evaluate import target_object
     g, ob = owner(context)
     cam = ensure_camera(context, g, ob)
-    with _isolated(context, target_object(context), cam, spec.SPEC["thumbnail"]["render_size"]):
+    with _isolated(context, [target_object(context)], cam, spec.SPEC["thumbnail"]["render_size"]):
         bpy.ops.render.render()
     return bpy.data.images.get("Render Result")
 
@@ -484,9 +484,9 @@ def frame_shot(V, turn, tilt, fill=0.88):
     return max(distance, 0.2), (float(pan[0]), float(pan[1]))
 
 
-def render_shots(context, ob, centre, shots, size):
-    """PNG bytes of ob alone through the thumbnail's own lens, for each (turn, tilt, distance, pan), on a mid grey. Your
-    file's cameras, render settings and output path all come back afterwards."""
+def render_shots(context, ob, centre, shots, size, also=(), background=(0.5, 0.5, 0.5)):
+    """PNG bytes of ob (plus the objects in `also`) through the thumbnail's own lens, for each (turn, tilt, distance,
+    pan). Your file's cameras, render settings and output path all come back afterwards."""
     sc = context.scene
     r = sc.render
     shading = sc.display.shading
@@ -499,12 +499,12 @@ def render_shots(context, ob, centre, shots, size):
              tuple(shading.background_color))
     out = []
     try:
-        with tempfile.TemporaryDirectory() as folder, _isolated(context, ob, cam, size):
+        with tempfile.TemporaryDirectory() as folder, _isolated(context, [ob, *also], cam, size):
             r.film_transparent = False
             r.image_settings.file_format = "PNG"
             r.image_settings.color_mode = "RGB"
             shading.background_type = "VIEWPORT"
-            shading.background_color = (0.5, 0.5, 0.5)
+            shading.background_color = background
             for i, (turn, tilt, distance, pan) in enumerate(shots):
                 m = geom.to_blender(local_matrix(turn, tilt, distance, pan, (0.0, 0.0, 0.0)))
                 m[:3, 3] += centre
@@ -534,7 +534,7 @@ def _render_still(context):
 
 @contextlib.contextmanager
 def _isolated(context, keep, cam, size):
-    """render settings for a flat, square shot of only `keep` through `cam`, put back afterwards"""
+    """render settings for a flat, square shot of only the objects in `keep` through `cam`, put back afterwards"""
     sc = context.scene
     r = sc.render
     shading = sc.display.shading
@@ -551,7 +551,7 @@ def _isolated(context, keep, cam, size):
         shading.color_type = "TEXTURE"
         sc.camera = cam
         for o in sc.objects:
-            if o is not keep and o is not cam and not o.hide_render:
+            if o not in keep and o is not cam and not o.hide_render:
                 o.hide_render = True
                 hidden.append(o)
         yield
