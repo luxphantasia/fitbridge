@@ -148,6 +148,15 @@ function Geometry.bestYRotation(expected: { number }, actual: { number }, sample
 	return if flipped < same then 180 else 0, same, flipped
 end
 
+-- The biggest a texture may be: the size Send shrinks to, capped by Roblox's limit when known.
+-- PBR means a SurfaceAppearance, which gets a bigger limit than a plain TextureID here.
+function Geometry.textureLimit(pbr: boolean, onSend: any, maxColorOnly: number?, maxPbr: number?): number
+	if pbr then
+		return math.min(onSend.pbr, maxPbr or onSend.pbr)
+	end
+	return math.min(onSend.color_only, maxColorOnly or onSend.color_only)
+end
+
 -- Studio-side re-check of a package manifest + mesh against the active rules.
 -- `rules` = { maxTriangles, maxTextureSize, size = Vec, offset = Vec }.
 function Geometry.studioChecks(manifest: any, mesh: any, rules: any): { Check }

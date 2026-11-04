@@ -94,6 +94,7 @@ The current accessory: its manifest only, without the heavy data.
 - `checks[].status` is `pass`, `warn` or `fail`. `sendable` is false when any `block` check (severity from the spec) fails, unless `override` is true.
 - `pbr` is true when the material has any map besides colour. Studio then builds a `SurfaceAppearance`. Otherwise it sets `MeshPart.TextureID`.
 - A missing texture map is `null`.
+- **Send shrinks oversized textures.** Every map goes down to `limits.texture_size_on_send` in the spec: 1024 when `pbr` is false, 2048 when `pbr` is true. Each is capped by Roblox's live limit when known (`limits.max_texture_size` and `limits.max_pbr_texture_size` from `/v1/rules`). Halve until the longest side fits, so the aspect ratio and power-of-two sizes stay. This only changes the sent copy, never the image in Blender. The manifest's `width`, `height` and `sha256`, the texture endpoint and the upload all describe the shrunk copy.
 
 ### `GET /v1/package/mesh`
 ```json
@@ -126,7 +127,7 @@ Studio caches `sha256` → asset id, so an unchanged mesh or texture is never up
 Studio sends the output of `AvatarCreationService:GetValidationRules()`, converted to JSON. Vector3 values become `[x, y, z]` and enum keys become their names (`"HatAccessory"`). The addon saves it and prefers it over the bundled `spec/ugc_spec.json`. The panel shows "Rules: live from Studio, <date>" or "Rules: bundled snapshot".
 ```json
 { "protocol": 1, "fetched": "2026-10-30T18:22:10Z", "studio_version": "0.6xx",
-  "limits": { "max_triangles": 4000, "max_texture_size": 2048 },
+  "limits": { "max_triangles": 4000, "max_texture_size": 1024, "max_pbr_texture_size": 2048 },
   "accessories": { "HatAccessory": { "rigid_allowed": true,
       "attachments": { "HatAttachment": { "size": [..], "offset": [..] } } } },
   "raw": { … }

@@ -55,6 +55,12 @@ check("studio: bounds pass", byId.bounds == "pass")
 check("studio: 4k texture fails", byId.texture_color == "fail")
 check("studio: tris pass", byId.triangles == "pass")
 
+local onSend = { color_only = 1024, pbr = 2048 }
+check("limit: colour only, no live rules", Geometry.textureLimit(false, onSend) == 1024)
+check("limit: colour only keeps our 1024 under a bigger cap", Geometry.textureLimit(false, onSend, 2048, 2048) == 1024)
+check("limit: pbr", Geometry.textureLimit(true, onSend, 1024, 2048) == 2048)
+check("limit: Roblox lowers pbr", Geometry.textureLimit(true, onSend, 1024, 1024) == 1024)
+
 -- An asymmetric shape: a point sticking out the front (-Z) and one to the right (+X).
 local shape = { 0, 0, -1, 1, 0, 0, 0, 0.5, 0, -0.2, -0.3, 0.4 }
 local rot = Geometry.bestYRotation(shape, shape)
