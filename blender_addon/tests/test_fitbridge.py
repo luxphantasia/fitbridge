@@ -6,6 +6,7 @@ import json
 import math
 import os
 import sys
+import tomllib
 import urllib.request
 
 import bmesh
@@ -109,7 +110,11 @@ if code != 200 or h["protocol"] != 1 or h["sent_revision"] != 0 or "rules" not i
 code, e = get("/v1/package")
 if code != 404 or "Send to Studio" not in e.get("error", ""):
     fail(f"package before sending should be a 404 with a sentence: {code} {e}")
-done.append("/v1/hello answers, asks for rules; /v1/package 404 until sent")
+with open(os.path.join(os.path.dirname(fitbridge.__file__), "blender_manifest.toml"), "rb") as f:
+    manifest_version = tomllib.load(f)["version"]
+if h["app_version"] != manifest_version or upload.USER_AGENT != f"FitBridge-Blender/{manifest_version}":
+    fail(f"version must come from the manifest ({manifest_version}): {h['app_version']}, {upload.USER_AGENT}")
+done.append("/v1/hello answers with the manifest's version, asks for rules; /v1/package 404 until sent")
 
 # --- only Classic is offered (Studio can't load the Rthro meshes; live rules use Classic boxes)
 if [i.identifier for i in st.bl_rna.properties["body_scale"].enum_items] != ["Classic"] or st.body_scale != "Classic":
