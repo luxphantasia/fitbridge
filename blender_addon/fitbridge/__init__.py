@@ -3,6 +3,7 @@
 # FitBridge Studio plugin builds the finished Accessory. Contract: docs/PROTOCOL.md and spec/ugc_spec.json.
 
 import os
+import textwrap
 import time
 
 import bpy
@@ -348,6 +349,17 @@ class FB_OT_restart_server(bpy.types.Operator):
 
 # ----------------------------------------------------------------------------------------------------------- panel
 
+def _wrapped(context, layout, text, icon):
+    """a label that continues on the next line instead of being cut off by a narrow sidebar"""
+    style = context.preferences.ui_styles[0].widget
+    per_char = style.points * context.preferences.system.ui_scale * 0.62
+    chars = max(12, int((context.region.width - 60 * context.preferences.system.ui_scale) / per_char))
+    col = layout.column(align=True)
+    col.scale_y = 0.85
+    for i, part in enumerate(textwrap.wrap(text, chars) or [""]):
+        col.label(text=part, icon=icon if i == 0 else "BLANK1")
+
+
 class FB_PT_main(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -458,16 +470,16 @@ class FB_PT_main(bpy.types.Panel):
         box = lay.box()
         kind, line = auto.status(context)
         if kind == "ready":
-            box.label(text=line, icon="CHECKMARK")
-            box.label(text="Meets all the checks. Thumbnail is ready.", icon="CHECKMARK")
+            _wrapped(context, box, line, "CHECKMARK")
+            _wrapped(context, box, "Meets all the checks. Thumbnail is ready.", "CHECKMARK")
             for h in auto.heads_ups(res):
-                box.label(text=h, icon="ERROR")
+                _wrapped(context, box, h, "ERROR")
         elif kind == "looking":
-            box.label(text=line, icon="SORTTIME")
+            _wrapped(context, box, line, "SORTTIME")
         else:
-            row = box.row()
-            row.alert = True
-            row.label(text=line, icon="ERROR")
+            col = box.column()
+            col.alert = True
+            _wrapped(context, col, line, "ERROR")
             if kind == "failed":
                 box.operator("fitbridge.auto_retry", icon="FILE_REFRESH")
 
