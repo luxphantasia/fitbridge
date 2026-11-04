@@ -172,7 +172,7 @@ Studio plugins can't upload assets yet (`CreateAssetAsync` reports "not availabl
 
 **On Send:**
 1. Freeze the package snapshot (as before) and bump `sent_revision` straight away. Studio builds a preview from the raw mesh right away, so you get feedback in seconds.
-2. If the mesh `sha256` plus every texture `sha256` is already in the upload cache, reuse that `model_asset_id`. Otherwise export a `.glb` from the **snapshot's wire data**: centred positions in Roblox space, normals, UVs with V flipped back for glTF, and the texture maps as a glTF material (PBR maps go in when `pbr` is true). Then `POST https://apis.roblox.com/assets/v1/assets` (multipart: `request` JSON with `assetType: "Model"`, `displayName`, `description`, `creationContext.creator.userId|groupId`, plus `fileContent` with the glb), and poll `GET /assets/v1/operations/{id}` until `done`.
+2. If the mesh `sha256` plus every texture `sha256` is already in the upload cache, reuse that `model_asset_id`. Otherwise export a `.glb` from the **snapshot's wire data**: centred positions in Roblox space, normals, UVs as they are (glTF's V starts at the top too), and the texture maps as a glTF material (PBR maps go in when `pbr` is true). Then `POST https://apis.roblox.com/assets/v1/assets` (multipart: `request` JSON with `assetType: "Model"`, `displayName`, `description`, `creationContext.creator.userId|groupId`, plus `fileContent` with the glb), and poll `GET /assets/v1/operations/{id}` until `done`.
    - Cache key: mesh sha plus texture shas, so moving or rotating the item never re-uploads it.
 3. The manifest gains an `upload` block, and `/v1/hello` gains `upload_state` so Studio knows when to rebuild:
 
@@ -197,7 +197,7 @@ Studio plugins can't upload assets yet (`CreateAssetAsync` reports "not availabl
 
 **When the place can't load the model:** Roblox can refuse an open experience ("User is not authorized to access Asset") even when the same account made the upload and it loads fine in a new place. Studio then falls back to the preview build, with the in-memory mesh and textures, and says so in the `uploaded` check. A preview can't be submitted.
 
-**GLB writing:** write the `.glb` straight from the wire arrays with a small glTF writer (positions as-is, `v_gltf = 1 - v_wire`, PNG images embedded), not with Blender's glTF exporter. That way no axis conversion happens behind our back, and the orientation check in Studio only has to catch Roblox's own importer behaviour.
+**GLB writing:** write the `.glb` straight from the wire arrays with a small glTF writer (positions as-is, `v_gltf = v_wire`, because glTF's V starts at the top like the wire's, PNG images embedded), not with Blender's glTF exporter. That way no axis conversion happens behind our back, and the orientation check in Studio only has to catch Roblox's own importer behaviour.
 
 ## Errors
 Any non-2xx response has `{ "protocol": 1, "error": "human readable sentence" }`. Show that sentence as-is.
