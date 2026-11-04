@@ -28,22 +28,31 @@ def target_object(context):
     return None
 
 
-def selected_other(context):
-    """the selected active mesh when it isn't the picked one, else None"""
-    st = context.scene.fitbridge
-    ob = context.view_layer.objects.active
-    if ob is None or ob is st.target or ob.type != "MESH" or ob.get("fitbridge_rig"):
-        return None
-    return ob if ob.select_get() and ob.visible_get() else None
+def selected_meshes(context):
+    """the meshes you have selected, not counting the rig"""
+    return [o for o in context.view_layer.objects.selected
+            if o.type == "MESH" and not o.get("fitbridge_rig") and o.visible_get()]
 
 
-def follow_current(context):
-    """a picked mesh you've hidden isn't the one you're working on: move on to the selected one"""
+def follow_selection(context):
+    """the one selected mesh is the accessory. With nothing selected the last one stays (clicking empty space or the
+    rig shouldn't lose your fit and shot), with several it's up to you to choose."""
+    sel = selected_meshes(context)
     st = context.scene.fitbridge
-    if st.target is not None and not st.target.visible_get():
-        other = selected_other(context)
-        if other is not None:
-            st.target = other
+    if len(sel) == 1 and sel[0] is not st.target:
+        st.target = sel[0]
+
+
+def selection_problem(context):
+    """what stops Preview and Send, in words for the panel, or None"""
+    n = len(selected_meshes(context))
+    if n > 1:
+        return f"{n} meshes selected: only select one"
+    if n == 0:
+        target = context.scene.fitbridge.target
+        if target is None or not target.visible_get():
+            return "Select the accessory mesh"
+    return None
 
 
 def read_mesh(ob, depsgraph):
