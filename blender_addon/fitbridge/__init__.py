@@ -14,6 +14,7 @@ from . import draw, evaluate, rig, server, spec, thumb, upload
 ICONS = {"pass": "CHECKMARK", "warn": "ERROR", "fail": "CANCEL"}
 _dirty = {"flag": True, "last": 0.0}
 _status = {"last_result": None, "last_sent": None, "message": ""}
+NAME_KEY = "fitbridge_name"
 
 
 def mark_dirty(self=None, context=None):
@@ -96,14 +97,26 @@ def _poll_mesh(self, ob):
     return ob.type == "MESH" and not ob.get("fitbridge_rig")
 
 
+def _target_changed(self, context):
+    """each accessory keeps its own Studio name, so one item's name never goes out on another"""
+    self.item_name = self.target.get(NAME_KEY, "") if self.target is not None else ""
+    mark_dirty()
+
+
+def _name_changed(self, context):
+    if self.target is not None and self.target.library is None:
+        self.target[NAME_KEY] = self.item_name
+
+
 class FB_Settings(bpy.types.PropertyGroup):
     body_scale: EnumProperty(name="Body scale", items=[(s, s, spec.SPEC["body_scales"][s]["label"]) for s in spec.OFFERED_SCALES],
                              default=spec.OFFERED_SCALES[0], update=_scale_changed)
     acc_type: EnumProperty(name="Type", items=[(t, t, "") for t in spec.RIGID_TYPES], update=_type_changed)
     attachment: EnumProperty(name="Attachment", items=_attachment_items, update=mark_dirty)
-    target: PointerProperty(name="Mesh", type=bpy.types.Object, poll=_poll_mesh, update=mark_dirty,
+    target: PointerProperty(name="Mesh", type=bpy.types.Object, poll=_poll_mesh, update=_target_changed,
                             description="The accessory mesh (empty = the active object)")
-    item_name: StringProperty(name="Name", description="Accessory name in Studio (empty = the object's name)")
+    item_name: StringProperty(name="Name", description="Accessory name in Studio (empty = the object's name)",
+                              update=_name_changed)
     show_box: BoolProperty(name="Ghost box", default=True, description="Draw the attachment's bounds box")
     override: BoolProperty(name="Override checks (testing)", default=False,
                            description="Allow Send to Studio even when a blocking check fails")
@@ -242,12 +255,27 @@ class FB_OT_thumb_preset(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class FB_OT_use_selected(bpy.types.Operator):
+    bl_idname = "fitbridge.use_selected"
+    bl_label = "Use selected"
+    bl_description = "Make the selected mesh the accessory: the checks, thumbnail and Send all use it"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        ob = evaluate.selected_other(context)
+        if ob is None:
+            return {"CANCELLED"}
+        context.scene.fitbridge.target = ob
+        return {"FINISHED"}
+
+
 class FB_OT_thumb_preview(bpy.types.Operator):
     bl_idname = "fitbridge.thumb_preview"
     bl_label = "Preview"
     bl_description = "Render the 420 x 420 thumbnail with simple flat lighting (only the accessory) and show it"
 
     def execute(self, context):
+        evaluate.follow_current(context)
         img = thumb.preview(context)
         if img is None:
             self.report({"ERROR"}, "The preview render failed")
@@ -272,6 +300,7 @@ class FB_OT_send(bpy.types.Operator):
 
     def execute(self, context):
         st = context.scene.fitbridge
+        evaluate.follow_current(context)
         res = evaluate.evaluate(context)
         if res.get("fit") is None:
             self.report({"ERROR"}, "Nothing to send: fit a mesh first")
@@ -346,6 +375,11 @@ class FB_PT_main(bpy.types.Panel):
         if st.target is None:
             ob = evaluate.target_object(context)
             box.label(text=f"Using active: {ob.name}" if ob else "No mesh picked", icon="OBJECT_DATA")
+        else:
+            other = evaluate.selected_other(context)
+            if other is not None:
+                box.label(text=f"Checks, thumbnail and Send use {st.target.name}", icon="ERROR")
+                box.operator(FB_OT_use_selected.bl_idname, text=f"Use {other.name}", icon="EYEDROPPER")
         box.prop(st, "item_name")
         box.prop(st, "show_box")
         if not draw.ready(context):
@@ -451,12 +485,17 @@ def process_inbox():
 def _tick():
     try:
         changed = process_inbox()
+        st = getattr(bpy.context.scene, "fitbridge", None)
+        if st is not None and st.item_name and st.target is not None and NAME_KEY not in st.target \
+                and st.target.library is None:
+            st.target[NAME_KEY] = st.item_name        # a name typed before names were kept per accessory
         now = time.time()
         if _dirty["flag"] and now - _dirty["last"] > 0.1 and bpy.context.scene is not None:
             _dirty["flag"] = False
             _dirty["last"] = now
             try:
                 if evaluate.in_use(bpy.context):
+                    evaluate.follow_current(bpy.context)
                     res = evaluate.evaluate(bpy.context)
                     thumb.sync(bpy.context, res)
                 else:
@@ -509,7 +548,7 @@ def _on_load(*_args):
     evaluate.LIVE["result"] = None
 
 
-classes = (FB_Thumb, FB_Settings, FB_Prefs, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_thumb_preset, FB_OT_thumb_preview,
+classes = (FB_Thumb, FB_Settings, FB_Prefs, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_thumb_preset, FB_OT_use_selected, FB_OT_thumb_preview,
            FB_OT_send,
            FB_OT_restart_server, FB_PT_main)
 
