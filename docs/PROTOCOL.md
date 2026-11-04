@@ -110,7 +110,7 @@ Vertices are split per corner wherever the UV or normal differs, so each index a
   "rgba_base64": "…", "png_path": "/abs/path/on/disk/color.png" }
 ```
 - `rgba_base64` holds raw RGBA8 pixels, top row first, ready for `EditableImage:WritePixelsBuffer`.
-- `png_path` is there for the manual fallback (Studio's importer) when a texture is bigger than `limits.editable_image_max_size`.
+- `png_path` is there for the manual fallback (Studio's importer) when Studio can't create an image that size. 2048×2048 works.
 
 ### `POST /v1/package/result` (Studio to Blender)
 Studio reports what happened, so the Blender panel can show it.
@@ -193,6 +193,8 @@ Studio plugins can't upload assets yet (`CreateAssetAsync` reports "not availabl
    - `Handle.Size = |R · size|`
    It reports which R it used in the result.
 3. Rebuild the Accessory the same way as the preview build, with the uploaded MeshPart as the Handle, and post the result with `"uploaded": true`.
+
+**When the place can't load the model:** Roblox can refuse an open experience ("User is not authorized to access Asset") even when the same account made the upload and it loads fine in a new place. Studio then falls back to the preview build, with the in-memory mesh and textures, and says so in the `uploaded` check. A preview can't be submitted.
 
 **GLB writing:** write the `.glb` straight from the wire arrays with a small glTF writer (positions as-is, `v_gltf = 1 - v_wire`, PNG images embedded), not with Blender's glTF exporter. That way no axis conversion happens behind our back, and the orientation check in Studio only has to catch Roblox's own importer behaviour.
 
