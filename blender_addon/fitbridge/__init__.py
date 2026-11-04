@@ -74,6 +74,10 @@ def _shot_changed(self, context):
         return
     self.manual = True
     thumb.apply_params(context)
+    for win in context.window_manager.windows:
+        for area in win.screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()                              # the live thumbnail follows the slider as you drag
 
 
 class FB_Thumb(bpy.types.PropertyGroup):
@@ -147,6 +151,9 @@ class FB_Prefs(bpy.types.AddonPreferences):
     creator_id: StringProperty(name="Creator id",
                                description="The user or group that will submit the UGC item (Roblox checks that "
                                            "it owns the mesh and textures)")
+    live_preview: BoolProperty(name="Live preview", default=True,
+                               description="Show the thumbnail as it stands in the corner of the viewport. It updates "
+                                           "as you frame the shot. Quick look: Preview is the full render")
     auto_mode: BoolProperty(name="Auto (experimental)", default=False, update=lambda self, context: mark_dirty(),
                             description="Claude looks at the selected mesh and sets the type, attachment, name and "
                                         "thumbnail for you. Each new mesh sends 17 renders of it to Anthropic in two "
@@ -285,6 +292,35 @@ class FB_OT_thumb_preview(bpy.types.Operator):
             bpy.ops.render.view_show("INVOKE_DEFAULT")
         except RuntimeError:
             pass
+        return {"FINISHED"}
+
+
+class FB_OT_live_window(bpy.types.Operator):
+    bl_idname = "fitbridge.live_window"
+    bl_label = "Pop out thumbnail"
+    bl_description = "Show the live thumbnail in its own window: move it anywhere, size it however you like, and it " \
+                     "stays square. Close the window to go back to the corner of the viewport"
+
+    def execute(self, context):
+        wm = context.window_manager
+        before = {w.as_pointer() for w in wm.windows}
+        r = context.scene.render
+        view = context.preferences.view
+        saved = r.resolution_x, r.resolution_y, r.resolution_percentage, view.render_display_type
+        try:
+            r.resolution_x = r.resolution_y = 480                # Blender sizes this window from the render size
+            r.resolution_percentage = 100
+            view.render_display_type = "WINDOW"
+            bpy.ops.render.view_show("INVOKE_DEFAULT")
+        finally:
+            r.resolution_x, r.resolution_y, r.resolution_percentage, view.render_display_type = saved
+        opened = [w for w in wm.windows if w.as_pointer() not in before]
+        if not opened:
+            self.report({"ERROR"}, "Close the Blender Render window first, then try again")
+            return {"CANCELLED"}
+        area = opened[0].screen.areas[0]
+        area.type = "VIEW_3D"
+        draw.mark_live_window(area)
         return {"FINISHED"}
 
 
@@ -432,6 +468,11 @@ class FB_PT_main(bpy.types.Panel):
         row = box.row(align=True)
         row.prop(st, "thumb_view", toggle=True, icon="VIEW_CAMERA")
         row.operator("fitbridge.reset_camera", text="", icon="FILE_REFRESH")
+        p = prefs()
+        if p is not None:
+            row = box.row(align=True)
+            row.prop(p, "live_preview", toggle=True, icon="HIDE_OFF" if p.live_preview else "HIDE_ON")
+            row.operator("fitbridge.live_window", text="Pop out", icon="WINDOW")
         g, gob = thumb.owner(context)
         if st.thumb_view:
             row = box.row(align=True)
@@ -609,7 +650,7 @@ def _on_load(*_args):
 
 classes = (FB_Thumb, FB_Settings, FB_Prefs, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_thumb_preset, FB_OT_thumb_preview,
            FB_OT_send,
-           FB_OT_auto_retry, FB_OT_restart_server, FB_PT_main)
+           FB_OT_live_window, FB_OT_auto_retry, FB_OT_restart_server, FB_PT_main)
 
 
 def register():

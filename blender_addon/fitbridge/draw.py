@@ -4,7 +4,9 @@
 import blf
 import bpy
 import gpu
+import numpy as np
 from gpu_extras.batch import batch_for_shader
+from mathutils import Matrix
 
 from . import geom
 from .evaluate import LIVE
@@ -196,13 +198,200 @@ def draw_crop_guide():
     gpu.state.blend_set("NONE")
 
 
+# ------------------------------------------------------------------------------------------------ live thumbnail
+
+LIVE_SIZE = 256            # pixels, before the UI scale
+MAX_WINDOW_SIZE = 1024     # a big pop-out stretches this instead of drawing more
+_live = {"mesh": None, "batch": None, "shader": None, "offscreen": None, "broken": False, "windows": set()}
+
+_LIVE_VERT = """
+void main() {
+    uvInterp = uv;
+    normalInterp = normal;
+    gl_Position = viewProjection * vec4(pos, 1.0);
+}
+"""
+_LIVE_FRAG = """
+void main() {
+    vec3 base = hasImage != 0 ? texture(image, uvInterp).rgb : vec3(0.6);
+    float facing = abs(dot(normalize(normalInterp), lightDir));
+    vec3 lit = base * (0.32 + 0.55 * facing);
+    fragColor = vec4(pow(clamp(lit, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
+}
+"""
+
+
+def live_camera(res, g):
+    """(view-projection as a nested list, direction toward the camera) for the shot in g, in Blender world, through the
+    thumbnail's own lens"""
+    from . import thumb
+    world = np.array(thumb.expected_world(res, g), float)
+    near, far = 0.01, 1000.0
+    f = 1.0 / thumb.TAN
+    proj = np.array([[f, 0, 0, 0], [0, f, 0, 0], [0, 0, (far + near) / (near - far), 2 * far * near / (near - far)],
+                     [0, 0, -1.0, 0]])
+    return proj @ np.linalg.inv(world), world[:3, 2]
+
+
+def live_arrays(res):
+    """the accessory per corner, in Blender world, ready for the GPU"""
+    m = res["mesh"]
+    tl = m["tri_loops"][:, ::-1] if m["flip"] else m["tri_loops"]
+    loops = tl.ravel()
+    uv = m["uv"][loops] if m["uv"] is not None else np.zeros((len(loops), 2))
+    return {"pos": m["co"][m["loop_vert"][loops]].astype(np.float32), "normal": m["normals"][loops].astype(np.float32),
+            "uv": uv.astype(np.float32)}
+
+
+def _live_shader():
+    if _live["shader"] is None:
+        info = gpu.types.GPUShaderCreateInfo()
+        info.vertex_in(0, "VEC3", "pos")
+        info.vertex_in(1, "VEC3", "normal")
+        info.vertex_in(2, "VEC2", "uv")
+        between = gpu.types.GPUStageInterfaceInfo("fitbridge_live")
+        between.smooth("VEC2", "uvInterp")
+        between.smooth("VEC3", "normalInterp")
+        info.vertex_out(between)
+        info.push_constant("MAT4", "viewProjection")
+        info.push_constant("VEC3", "lightDir")
+        info.push_constant("INT", "hasImage")
+        info.sampler(0, "FLOAT_2D", "image")
+        info.fragment_out(0, "VEC4", "fragColor")
+        info.vertex_source(_LIVE_VERT)
+        info.fragment_source(_LIVE_FRAG)
+        _live["shader"] = gpu.shader.create_from_info(info)
+    return _live["shader"]
+
+
+def _live_ready(context):
+    """there's a fitted accessory whose shot means something (in Auto mode: once it has been decided)"""
+    from . import auto
+    res = LIVE["result"]
+    if res is None or res.get("fit") is None or res.get("mesh") is None or res.get("A") is None:
+        return False
+    return not auto.enabled() or auto.status(context)[0] == "ready"
+
+
+def _live_window_open(context):
+    """is a pop-out still open? (closed ones are forgotten)"""
+    if not _live["windows"]:
+        return False
+    alive = {a.as_pointer() for w in context.window_manager.windows for a in w.screen.areas if a.type == "VIEW_3D"}
+    _live["windows"] &= alive
+    return bool(_live["windows"])
+
+
+def _rect(x, y, w, h, color):
+    sh = gpu.shader.from_builtin("UNIFORM_COLOR")
+    sh.uniform_float("color", color)
+    batch_for_shader(sh, "TRI_FAN", {"pos": ((x, y), (x + w, y), (x + w, y + h), (x, y + h))}).draw(sh)
+
+
+def _render_live(context, size):
+    """draw the shot into the offscreen buffer at this size"""
+    from . import thumb
+    res = LIVE["result"]
+    g, _ob = thumb.owner(context)
+    shader = _live_shader()
+    if _live["mesh"] is not res["mesh"]:
+        _live["batch"] = batch_for_shader(shader, "TRIS", live_arrays(res))
+        _live["mesh"] = res["mesh"]
+    if _live["offscreen"] is None or _live["offscreen"].width != size:
+        if _live["offscreen"] is not None:
+            _live["offscreen"].free()
+        _live["offscreen"] = gpu.types.GPUOffScreen(size, size)
+    view_proj, toward = live_camera(res, g)
+    image = (res.get("textures") or {}).get("color")
+    with _live["offscreen"].bind():
+        fb = gpu.state.active_framebuffer_get()
+        fb.clear(color=(0.5, 0.5, 0.5, 1.0), depth=1.0)
+        gpu.state.depth_test_set("LESS_EQUAL")
+        gpu.state.depth_mask_set(True)
+        shader.bind()
+        shader.uniform_float("viewProjection", Matrix(view_proj.tolist()))
+        shader.uniform_float("lightDir", tuple(float(x) for x in toward))
+        shader.uniform_int("hasImage", 1 if image is not None else 0)
+        if image is not None:
+            shader.uniform_sampler("image", gpu.texture.from_image(image))
+        _live["batch"].draw(shader)
+        gpu.state.depth_test_set("NONE")
+        gpu.state.depth_mask_set(False)
+
+
+def _show_live(x, y, s):
+    sh = gpu.shader.from_builtin("IMAGE")
+    sh.bind()
+    sh.uniform_sampler("image", _live["offscreen"].texture_color)
+    batch_for_shader(sh, "TRI_FAN", {"pos": ((x, y), (x + s, y), (x + s, y + s), (x, y + s)),
+                                     "texCoord": ((0, 0), (1, 0), (1, 1), (0, 1))}).draw(sh)
+
+
+def draw_live_thumbnail():
+    """the thumbnail as it stands, redrawn with the viewport: only the accessory. It fills a pop-out window, kept square
+    however the window is sized, or else sits in the corner of the viewport."""
+    if _live["broken"] or bpy.app.background:
+        return
+    context = bpy.context
+    try:
+        from . import auto
+        scale = context.preferences.system.ui_scale
+        popped = _live_window_open(context)
+        if context.area is not None and context.area.as_pointer() in _live["windows"]:
+            w, h = context.region.width, context.region.height
+            _rect(0, 0, w, h, (0.11, 0.11, 0.11, 1.0))
+            if _live_ready(context):
+                size = min(w, h)
+                _render_live(context, max(min(size, MAX_WINDOW_SIZE), 64))
+                _show_live((w - size) // 2, (h - size) // 2, size)
+            else:
+                blf.size(0, 13 * scale)
+                blf.color(0, 1, 1, 1, 0.7)
+                blf.position(0, 12 * scale, h / 2, 0)
+                blf.draw(0, "Select an accessory")
+            return
+        p = auto.prefs()
+        if popped or not _live_ready(context) or not (auto.enabled() or (p and p.live_preview)):
+            return
+        size = int(LIVE_SIZE * scale)
+        _render_live(context, size)
+        x, y = int(20 * scale), int(85 * scale)
+        _show_live(x, y, size)
+        blf.size(0, 11 * scale)
+        blf.color(0, 1, 1, 1, 0.85)
+        blf.position(0, x, y + size + 5 * scale, 0)
+        blf.draw(0, "Thumbnail")
+    except ReferenceError:
+        pass                                                   # the mesh or image went away: the next check catches up
+    except Exception as e:
+        _live["broken"] = True                                 # don't repeat a drawing error on every redraw
+        print(f"FitBridge: live thumbnail off: {e}")
+
+
+def mark_live_window(area):
+    """this area is now a pop-out: nothing of the viewport underneath shows, only the thumbnail"""
+    space = area.spaces.active
+    space.show_region_header = False
+    space.show_region_ui = False
+    space.show_region_toolbar = False
+    space.show_gizmo = False
+    space.overlay.show_overlays = False
+    space.shading.type = "SOLID"
+    _live["windows"].add(area.as_pointer())
+
+
 def register():
     _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_view, (), "WINDOW", "POST_VIEW"))
     _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_ghost, (), "WINDOW", "POST_VIEW"))
     _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_text, (), "WINDOW", "POST_PIXEL"))
     _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_crop_guide, (), "WINDOW", "POST_PIXEL"))
+    _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_live_thumbnail, (), "WINDOW", "POST_PIXEL"))
 
 
 def unregister():
     while _handles:
         bpy.types.SpaceView3D.draw_handler_remove(_handles.pop(), "WINDOW")
+    if _live["offscreen"] is not None:
+        _live["offscreen"].free()
+    _live.update(mesh=None, batch=None, shader=None, offscreen=None, broken=False)
+    _live["windows"].clear()

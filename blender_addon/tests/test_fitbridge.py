@@ -973,6 +973,24 @@ done.append("Auto mode (fake Anthropic): off = nothing sent, no key = says so, r
             "a second look around the pick, framing fills the frame, answer sets type / attachment / name / shot, one look per mesh, moving doesn't re-ask, checks and Override can't be "
             "got around, bad answers corrected, each failure said once")
 
+# --- live thumbnail: the same camera and mesh as the real shot (background Blender can't draw, so the sums are checked)
+res = evaluate.evaluate(ctx)
+g_, _ob = thumb.owner(ctx)
+vp, toward = draw.live_camera(res, g_)
+arr = draw.live_arrays(res)
+clip = np.c_[arr["pos"], np.ones(len(arr["pos"]))] @ vp.T
+L_ = thumb.local_matrix(g_.turn, g_.tilt, g_.distance, (g_.pan_x, g_.pan_y), g_.pivot)
+H_ = thumb.handle_frame(res)
+Pr = (np.c_[arr["pos"] @ geom.P.T, np.ones(len(arr["pos"]))] @ np.linalg.inv(H_ @ L_).T)[:, :3]
+want_x = Pr[:, 0] / -Pr[:, 2] / thumb.TAN
+if not np.allclose(clip[:, 0] / clip[:, 3], want_x, atol=1e-4) or not np.allclose(toward, thumb.expected_world(res, g_)[:3, 2]):
+    fail("the live thumbnail must use the thumbnail's own camera and lens")
+n_corners = len(res["mesh"]["tri_loops"]) * 3
+if any(len(arr[k]) != n_corners for k in ("pos", "normal", "uv")):
+    fail("live thumbnail arrays: one entry per triangle corner")
+draw.draw_live_thumbnail()
+done.append("live thumbnail: same camera, lens and mesh as the real shot")
+
 # --- the selected mesh is the accessory: one follows, several ask you to choose, none keeps the last
 keep_target, keep_name, keep_active = st.target, st.item_name, ctx.view_layer.objects.active
 keep_sel = list(ctx.view_layer.objects.selected)
