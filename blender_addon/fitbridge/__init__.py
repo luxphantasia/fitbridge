@@ -9,7 +9,7 @@ import bpy
 from bpy.props import (BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty,
                        PointerProperty, StringProperty)
 
-from . import draw, evaluate, rig, server, spec, thumb, upload
+from . import auto, draw, evaluate, rig, server, spec, thumb, upload
 
 ICONS = {"pass": "CHECKMARK", "warn": "ERROR", "fail": "CANCEL"}
 _dirty = {"flag": True, "last": 0.0}
@@ -146,6 +146,12 @@ class FB_Prefs(bpy.types.AddonPreferences):
     creator_id: StringProperty(name="Creator id",
                                description="The user or group that will submit the UGC item (Roblox checks that "
                                            "it owns the mesh and textures)")
+    auto_mode: BoolProperty(name="Auto (experimental)", default=False, update=lambda self, context: mark_dirty(),
+                            description="Claude looks at the selected mesh and sets the type, attachment, name and "
+                                        "thumbnail for you. Each new mesh sends 5 renders of it to Anthropic, billed "
+                                        "to your API key")
+    claude_api_key: StringProperty(name="Anthropic API key", subtype="PASSWORD",
+                                   description="For Auto mode. Stays on this computer: only sent to api.anthropic.com")
 
     def draw(self, context):
         lay = self.layout
@@ -158,6 +164,9 @@ class FB_Prefs(bpy.types.AddonPreferences):
         row = box.row()
         row.prop(self, "creator_type", expand=True)
         row.prop(self, "creator_id")
+        box = lay.box()
+        box.label(text="Auto mode (experimental)", icon="LIGHT")
+        box.prop(self, "claude_api_key")
 
 
 def prefs():
@@ -289,6 +298,8 @@ class FB_OT_send(bpy.types.Operator):
             return False
         res = evaluate.LIVE["result"]
         st = context.scene.fitbridge
+        if auto.enabled():
+            return auto.status(context)[0] == "ready"
         return res is not None and res.get("fit") is not None and (res["ok"] or st.override)
 
     def execute(self, context):
@@ -298,7 +309,7 @@ class FB_OT_send(bpy.types.Operator):
         if res.get("fit") is None:
             self.report({"ERROR"}, "Nothing to send: fit a mesh first")
             return {"CANCELLED"}
-        if not res["ok"] and not st.override:
+        if not res["ok"] and (auto.enabled() or not st.override):
             self.report({"ERROR"}, "Fix the failing checks first (or tick Override for testing)")
             return {"CANCELLED"}
         rev = max(st.revision, server.state["sent_revision"]) + 1
@@ -312,6 +323,16 @@ class FB_OT_send(bpy.types.Operator):
         _status["message"] = f"Sent {manifest['name']} (revision {rev})"
         self.report({"INFO"}, _status["message"] + (". Studio builds it now." if server.studio_connected()
                                                      else ". Studio picks it up when its panel is open."))
+        return {"FINISHED"}
+
+
+class FB_OT_auto_retry(bpy.types.Operator):
+    bl_idname = "fitbridge.auto_retry"
+    bl_label = "Try again"
+    bl_description = "Ask Claude about this item again"
+
+    def execute(self, context):
+        auto.retry()
         return {"FINISHED"}
 
 
@@ -343,6 +364,12 @@ class FB_PT_main(bpy.types.Panel):
         res = evaluate.LIVE["result"]
         if abs(context.scene.unit_settings.scale_length - 1.0) > 1e-6:
             lay.label(text="Scene unit scale isn't 1.0 (1 unit = 1 stud)", icon="ERROR")
+        if p is not None:
+            lay.prop(p, "auto_mode")
+        if auto.enabled():
+            self._draw_auto(context, lay, res)
+            self._draw_send(context, lay.box())
+            return
 
         box = lay.box()
         box.label(text="Rig", icon="ARMATURE_DATA")
@@ -423,10 +450,31 @@ class FB_PT_main(bpy.types.Panel):
             box.label(text="Framed by you (reset to follow the type again)", icon="CAMERA_DATA")
 
         box = lay.box()
+        self._draw_send(context, box)
+        box.prop(st, "override")
+
+    def _draw_auto(self, context, lay, res):
+        """only what Claude decided and whether it passes: the settings and the checks list are its job here"""
+        box = lay.box()
+        kind, line = auto.status(context)
+        if kind == "ready":
+            box.label(text=line, icon="CHECKMARK")
+            box.label(text="Meets all the checks. Thumbnail is ready.", icon="CHECKMARK")
+            for h in auto.heads_ups(res):
+                box.label(text=h, icon="ERROR")
+        elif kind == "looking":
+            box.label(text=line, icon="SORTTIME")
+        else:
+            row = box.row()
+            row.alert = True
+            row.label(text=line, icon="ERROR")
+            if kind == "failed":
+                box.operator("fitbridge.auto_retry", icon="FILE_REFRESH")
+
+    def _draw_send(self, context, box):
         row = box.row(align=True)
         row.scale_y = 1.4
         row.operator("fitbridge.send", icon="EXPORT")
-        box.prop(st, "override")
         up = upload.public()
         if server.state["sent_revision"]:
             icon = {"done": "CHECKMARK", "failed": "ERROR", "pending": "SORTTIME", "off": "INFO"}[up["state"]]
@@ -479,6 +527,10 @@ def process_inbox():
 def _tick():
     try:
         changed = process_inbox()
+        try:
+            auto.tick(bpy.context)
+        except Exception as e:                                # Auto mode mustn't stop the loop
+            print(f"FitBridge: Auto mode: {e}")
         st = getattr(bpy.context.scene, "fitbridge", None)
         if st is not None and st.item_name and st.target is not None and NAME_KEY not in st.target \
                 and st.target.library is None:
@@ -545,7 +597,7 @@ def _on_load(*_args):
 
 classes = (FB_Thumb, FB_Settings, FB_Prefs, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_thumb_preset, FB_OT_thumb_preview,
            FB_OT_send,
-           FB_OT_restart_server, FB_PT_main)
+           FB_OT_auto_retry, FB_OT_restart_server, FB_PT_main)
 
 
 def register():

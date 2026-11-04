@@ -5,12 +5,15 @@
 # body part whenever type, attachment or mesh change. Viewport navigation moves the camera (Lock Camera to View) and the
 # sliders follow it; the sliders move the camera too.
 
+import contextlib
 import json
 import math
+import os
+import tempfile
 
 import bpy
 import numpy as np
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 
 from . import geom, spec
 
@@ -449,10 +452,68 @@ def reset(context):
 def preview(context):
     """render the 420 x 420 shot with simple flat lighting, only the accessory, and show it"""
     from .evaluate import target_object
-    sc = context.scene
     g, ob = owner(context)
     cam = ensure_camera(context, g, ob)
-    keep = target_object(context)
+    with _isolated(context, target_object(context), cam, spec.SPEC["thumbnail"]["render_size"]):
+        bpy.ops.render.render()
+    return bpy.data.images.get("Render Result")
+
+
+def render_views(context, ob, views, size):
+    """PNG bytes of ob alone from each (turn, tilt), on a mid grey, framed the same way. Your file's cameras, render
+    settings and Render Result output path all come back afterwards."""
+    sc = context.scene
+    r = sc.render
+    shading = sc.display.shading
+    data = bpy.data.cameras.new("FitBridge Auto")
+    data.lens_unit = "FOV"
+    data.angle = math.radians(40)
+    cam = bpy.data.objects.new("FitBridge Auto", data)
+    sc.collection.objects.link(cam)
+    corners = np.array([ob.matrix_world @ Vector(c) for c in ob.bound_box])
+    centre = (corners.min(axis=0) + corners.max(axis=0)) / 2
+    radius = max(float(np.linalg.norm(corners.max(axis=0) - corners.min(axis=0))) / 2, 1e-3)
+    distance = radius / math.tan(data.angle / 2) * 1.1
+    saved = (r.filepath, r.image_settings.file_format, r.image_settings.color_mode, shading.background_type,
+             tuple(shading.background_color))
+    shots = []
+    try:
+        with tempfile.TemporaryDirectory() as folder, _isolated(context, ob, cam, size):
+            r.film_transparent = False
+            r.image_settings.file_format = "PNG"
+            r.image_settings.color_mode = "RGB"
+            shading.background_type = "VIEWPORT"
+            shading.background_color = (0.5, 0.5, 0.5)
+            for i, (turn, tilt) in enumerate(views):
+                eye = centre + geom.P.T @ _dir(turn, tilt) * distance
+                cam.matrix_world = Matrix(geom.look_at(eye, centre, up=(0.0, 0.0, 1.0)).tolist())
+                context.view_layer.update()
+                r.filepath = os.path.join(folder, f"view{i}.png")
+                _render_still(context)
+                with open(r.filepath, "rb") as f:
+                    shots.append(f.read())
+    finally:
+        r.filepath, r.image_settings.file_format, r.image_settings.color_mode = saved[:3]
+        shading.background_type, shading.background_color = saved[3], saved[4]
+        bpy.data.objects.remove(cam)
+        bpy.data.cameras.remove(data)
+    return shots
+
+
+def _render_still(context):
+    """a timer has no window of its own, and the render operator wants one when there is one"""
+    windows = context.window_manager.windows
+    if windows and context.window is None:
+        with context.temp_override(window=windows[0]):
+            bpy.ops.render.render(write_still=True)
+    else:
+        bpy.ops.render.render(write_still=True)
+
+
+@contextlib.contextmanager
+def _isolated(context, keep, cam, size):
+    """render settings for a flat, square shot of only `keep` through `cam`, put back afterwards"""
+    sc = context.scene
     r = sc.render
     shading = sc.display.shading
     saved = {"engine": r.engine, "x": r.resolution_x, "y": r.resolution_y, "pct": r.resolution_percentage,
@@ -461,7 +522,7 @@ def preview(context):
     hidden = []
     try:
         r.engine = "BLENDER_WORKBENCH"
-        r.resolution_x = r.resolution_y = spec.SPEC["thumbnail"]["render_size"]
+        r.resolution_x = r.resolution_y = size
         r.resolution_percentage = 100
         r.film_transparent = True
         shading.light = "STUDIO"
@@ -471,7 +532,7 @@ def preview(context):
             if o is not keep and o is not cam and not o.hide_render:
                 o.hide_render = True
                 hidden.append(o)
-        bpy.ops.render.render()
+        yield
     finally:
         for o in hidden:
             o.hide_render = False
@@ -479,4 +540,3 @@ def preview(context):
         r.resolution_percentage, r.film_transparent = saved["pct"], saved["transparent"]
         sc.camera = saved["camera"]
         shading.light, shading.color_type = saved["light"], saved["color"]
-    return bpy.data.images.get("Render Result")

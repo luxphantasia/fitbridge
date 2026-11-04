@@ -28,6 +28,17 @@ def target_object(context):
     return None
 
 
+def auto_on():
+    from . import auto
+    return auto.enabled()
+
+
+def mark_changed():
+    """ask for the checks to run again on the next tick"""
+    from . import mark_dirty
+    mark_dirty()
+
+
 def selected_meshes(context):
     """the meshes you have selected, not counting the rig"""
     return [o for o in context.view_layer.objects.selected
@@ -219,7 +230,7 @@ def in_use(context):
     """FitBridge only checks live in a file where you're using it: a mannequin shown, an accessory mesh picked, or
     Thumbnail view on. Otherwise selecting things (a sculpt with millions of faces...) costs nothing."""
     st = context.scene.fitbridge
-    if st.target is not None or st.thumb_view:
+    if st.target is not None or st.thumb_view or auto_on():
         return True
     from .rig import R15_COLL, R6_COLL
     return any(bpy.data.collections.get(n) is not None for n in (R15_COLL, R6_COLL))
