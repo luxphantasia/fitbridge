@@ -114,7 +114,7 @@ class FB_Settings(bpy.types.PropertyGroup):
     acc_type: EnumProperty(name="Type", items=[(t, t, "") for t in spec.RIGID_TYPES], update=_type_changed)
     attachment: EnumProperty(name="Attachment", items=_attachment_items, update=mark_dirty)
     target: PointerProperty(name="Mesh", type=bpy.types.Object, poll=_poll_mesh, update=_target_changed,
-                            description="The accessory mesh (empty = the active object)")
+                            description="The accessory: follows the selected mesh")
     item_name: StringProperty(name="Name", description="Accessory name in Studio (empty = the object's name)",
                               update=_name_changed)
     show_box: BoolProperty(name="Ghost box", default=True, description="Draw the attachment's bounds box")
@@ -255,27 +255,17 @@ class FB_OT_thumb_preset(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class FB_OT_use_selected(bpy.types.Operator):
-    bl_idname = "fitbridge.use_selected"
-    bl_label = "Use selected"
-    bl_description = "Make the selected mesh the accessory: the checks, thumbnail and Send all use it"
-    bl_options = {"REGISTER", "UNDO"}
-
-    def execute(self, context):
-        ob = evaluate.selected_other(context)
-        if ob is None:
-            return {"CANCELLED"}
-        context.scene.fitbridge.target = ob
-        return {"FINISHED"}
-
-
 class FB_OT_thumb_preview(bpy.types.Operator):
     bl_idname = "fitbridge.thumb_preview"
     bl_label = "Preview"
     bl_description = "Render the 420 x 420 thumbnail with simple flat lighting (only the accessory) and show it"
 
+    @classmethod
+    def poll(cls, context):
+        return evaluate.selection_problem(context) is None
+
     def execute(self, context):
-        evaluate.follow_current(context)
+        evaluate.follow_selection(context)
         img = thumb.preview(context)
         if img is None:
             self.report({"ERROR"}, "The preview render failed")
@@ -294,13 +284,15 @@ class FB_OT_send(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
+        if evaluate.selection_problem(context):
+            return False
         res = evaluate.LIVE["result"]
         st = context.scene.fitbridge
         return res is not None and res.get("fit") is not None and (res["ok"] or st.override)
 
     def execute(self, context):
         st = context.scene.fitbridge
-        evaluate.follow_current(context)
+        evaluate.follow_selection(context)
         res = evaluate.evaluate(context)
         if res.get("fit") is None:
             self.report({"ERROR"}, "Nothing to send: fit a mesh first")
@@ -371,15 +363,14 @@ class FB_PT_main(bpy.types.Panel):
         box.label(text="Accessory", icon="MOD_CLOTH")
         box.prop(st, "acc_type")
         box.prop(st, "attachment")
-        box.prop(st, "target")
-        if st.target is None:
-            ob = evaluate.target_object(context)
-            box.label(text=f"Using active: {ob.name}" if ob else "No mesh picked", icon="OBJECT_DATA")
+        problem = evaluate.selection_problem(context)
+        if problem:
+            row = box.row()
+            row.alert = True                                   # red
+            row.label(text=problem, icon="ERROR")
         else:
-            other = evaluate.selected_other(context)
-            if other is not None:
-                box.label(text=f"Checks, thumbnail and Send use {st.target.name}", icon="ERROR")
-                box.operator(FB_OT_use_selected.bl_idname, text=f"Use {other.name}", icon="EYEDROPPER")
+            sel = evaluate.selected_meshes(context)
+            box.label(text=(sel[0] if sel else st.target).name, icon="OUTLINER_OB_MESH")
         box.prop(st, "item_name")
         box.prop(st, "show_box")
         if not draw.ready(context):
@@ -388,11 +379,13 @@ class FB_PT_main(bpy.types.Panel):
         box = lay.box()
         box.label(text="Checks", icon="CHECKBOX_HLT")
         col = box.column(align=True)
-        if res is not None:
+        if problem:
+            pass                                               # these would be about a mesh you may not mean
+        elif res is not None:
             for c in res["checks"]:
                 col.label(text=c["message"], icon=ICONS[c["status"]])
         elif not evaluate.in_use(context):
-            col.label(text="Show R15 or R6, or pick a mesh, to start", icon="INFO")
+            col.label(text="Show R15 or R6 to start", icon="INFO")
 
         box = lay.box()
         box.label(text="Thumbnail", icon="CAMERA_DATA")
@@ -495,7 +488,7 @@ def _tick():
             _dirty["last"] = now
             try:
                 if evaluate.in_use(bpy.context):
-                    evaluate.follow_current(bpy.context)
+                    evaluate.follow_selection(bpy.context)
                     res = evaluate.evaluate(bpy.context)
                     thumb.sync(bpy.context, res)
                 else:
@@ -548,7 +541,7 @@ def _on_load(*_args):
     evaluate.LIVE["result"] = None
 
 
-classes = (FB_Thumb, FB_Settings, FB_Prefs, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_thumb_preset, FB_OT_use_selected, FB_OT_thumb_preview,
+classes = (FB_Thumb, FB_Settings, FB_Prefs, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_thumb_preset, FB_OT_thumb_preview,
            FB_OT_send,
            FB_OT_restart_server, FB_PT_main)
 

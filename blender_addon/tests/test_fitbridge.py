@@ -169,6 +169,7 @@ hat = bpy.data.objects.new("Hat", me)
 ctx.scene.collection.objects.link(hat)
 hat.location = (0.3, -0.2, 5.1)                          # Roblox: x -0.3, z -0.2 (in front), bottom 0.1 above head
 ctx.view_layer.objects.active = hat
+hat.select_set(True)
 st.acc_type = "Hat"
 st.body_scale = "Classic"
 bpy.ops.fitbridge.spawn_r15()
@@ -752,51 +753,60 @@ if code != 409 or "Update the other plugin" not in e["error"]:
 server.state["protocol_mismatch"] = None
 done.append("live rules (real Studio shape) override limits + boxes, matched to 'Classic', 1024 textures, rigid_allowed; protocol mismatch -> 409")
 
-# --- moving on to another accessory: a hidden pick gives way to the selected mesh, each item keeps its own name
+# --- the selected mesh is the accessory: one follows, several ask you to choose, none keeps the last
 keep_target, keep_name, keep_active = st.target, st.item_name, ctx.view_layer.objects.active
+keep_sel = list(ctx.view_layer.objects.selected)
+for o in keep_sel:
+    o.select_set(False)
 first = bpy.data.objects.new("FirstItem", hat.data)
 second = bpy.data.objects.new("SecondItem", hat.data)
 ctx.scene.collection.objects.link(first)
 ctx.scene.collection.objects.link(second)
-st.target = first
+first.select_set(True)
+ctx.view_layer.update()
+evaluate.follow_selection(ctx)
+if st.target is not first or evaluate.selection_problem(ctx):
+    fail(f"one selected mesh is the accessory: {st.target} {evaluate.selection_problem(ctx)}")
 st.item_name = "First name"
 second.select_set(True)
-ctx.view_layer.objects.active = second
-ctx.view_layer.update()
-if evaluate.selected_other(ctx) is not second:
-    fail("a selected mesh that isn't the pick should be offered")
-evaluate.follow_current(ctx)
-if st.target is not first:
-    fail("a visible pick stays when something else is selected (e.g. selecting the rig or a reference)")
-first.hide_set(True)
-second.select_set(False)
-evaluate.follow_current(ctx)
-if st.target is not first:
-    fail("a hidden pick with nothing else selected stays")
-second.select_set(True)
-evaluate.follow_current(ctx)
+evaluate.follow_selection(ctx)
+if st.target is not first or evaluate.selection_problem(ctx) != "2 meshes selected: only select one":
+    fail(f"two selected: stay and say so: {st.target} {evaluate.selection_problem(ctx)}")
+if bpy.ops.fitbridge.send.poll() or bpy.ops.fitbridge.thumb_preview.poll():
+    fail("Send and Preview must be off with two meshes selected")
+first.select_set(False)
+evaluate.follow_selection(ctx)
 if st.target is not second or st.item_name != "":
-    fail(f"hiding the pick moves on to the selected mesh, without the old name: {st.target} '{st.item_name}'")
-st.item_name = "Second name"
-if evaluate.selected_other(ctx) is not None:
-    fail("nothing to offer when the selected mesh is the pick")
-first.hide_set(False)
-st.target = first
+    fail(f"the selection moved on, without the old name: {st.target} '{st.item_name}'")
+second.select_set(False)
+evaluate.follow_selection(ctx)
+if st.target is not second or evaluate.selection_problem(ctx) or not bpy.ops.fitbridge.thumb_preview.poll():
+    fail("nothing selected (clicked empty space) keeps the last accessory")
+second.hide_set(True)
+if evaluate.selection_problem(ctx) != "Select the accessory mesh" or bpy.ops.fitbridge.thumb_preview.poll():
+    fail("nothing selected and the last accessory hidden must ask for a mesh")
+second.hide_set(False)
+rig_part = next(o for o in ctx.scene.objects if o.get("fitbridge_rig") and o.type == "MESH")
+second.select_set(True)
+rig_part.select_set(True)
+if evaluate.selected_meshes(ctx) != [second]:
+    fail("rig parts don't count as selected meshes")
+rig_part.select_set(False)
+second.select_set(False)
+first.select_set(True)
+evaluate.follow_selection(ctx)
 if st.item_name != "First name":
     fail(f"going back should bring the first item's name back: '{st.item_name}'")
-first.select_set(True)
-ctx.view_layer.objects.active = second
-second.select_set(True)
-with ctx.temp_override(scene=ctx.scene, view_layer=ctx.view_layer):
-    if bpy.ops.fitbridge.use_selected() != {"FINISHED"} or st.target is not second or st.item_name != "Second name":
-        fail("Use selected should switch to the selected mesh and its name")
+first.select_set(False)
 st.target = keep_target
 st.item_name = keep_name
 ctx.view_layer.objects.active = keep_active
 for o in (first, second):
     bpy.data.objects.remove(o)
-done.append("hiding the picked mesh moves on to the selected one, a visible pick stays and offers "
-            "Use selected, each item keeps its own Studio name")
+for o in keep_sel:
+    o.select_set(True)
+done.append("the selected mesh is the accessory: two selected = red message + Send and Preview off, none keeps the last, "
+            "a hidden last one asks for a mesh, the rig doesn't count, each item keeps its own Studio name")
 
 head = {"name": "Head", "size": [1.2, 1.2, 1.2], "cframe": [0, 4.6, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
         "mesh": {"positions": [-0.6, -0.6, -0.6, 0.6, -0.6, -0.6, 0, 0.6, 0, 0, -0.6, 0.6], "triangles": [0, 1, 2, 0, 2, 3, 0, 3, 1, 1, 3, 2]}}
