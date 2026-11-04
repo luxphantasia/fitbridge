@@ -22,6 +22,7 @@ API = os.environ.get("FITBRIDGE_ROBLOX_API", "https://apis.roblox.com")   # test
 USER_AGENT = f"FitBridge-Blender/{VERSION}"
 POLL_EVERY = float(os.environ.get("FITBRIDGE_POLL_EVERY", "2.0"))
 POLL_FOR = 300.0
+GLB_FORMAT = 2     # bump when write_glb's output changes for the same mesh + textures, so models already uploaded aren't reused
 
 
 def png_bytes(rgba):
@@ -39,11 +40,11 @@ def png_bytes(rgba):
 
 def write_glb(mesh, textures, pbr, name="FitBridge"):
     """a .glb from the wire mesh (Roblox space, centred) and RGBA8 textures {map: (h, w, 4) uint8 or None}.
-    Positions and normals go in as they are; v_gltf = 1 - v_wire."""
+    Everything goes in as it is: glTF's V starts at the top of the image, the same as the wire and our top-row-first
+    pixels, so v_gltf = v_wire."""
     pos = np.asarray(mesh["positions"], np.float32).reshape(-1, 3)
     nrm = np.asarray(mesh["normals"], np.float32).reshape(-1, 3)
-    uv = np.asarray(mesh["uvs"], np.float32).reshape(-1, 2).copy()
-    uv[:, 1] = 1 - uv[:, 1]
+    uv = np.asarray(mesh["uvs"], np.float32).reshape(-1, 2)
     idx = np.asarray(mesh["triangles"], np.uint32)
     blob = bytearray()
     views, accessors = [], []
@@ -167,7 +168,7 @@ def _cache_put(key, asset_id):
 
 def cache_key(manifest, creator):
     shas = [manifest["mesh"]["sha256"]] + [(t or {}).get("sha256", "-") for _k, t in sorted(manifest["textures"].items())]
-    return f"{creator['type']}:{creator['id']}:" + ":".join(shas)
+    return f"glb{GLB_FORMAT}:{creator['type']}:{creator['id']}:" + ":".join(shas)
 
 
 class OpenCloudError(Exception):

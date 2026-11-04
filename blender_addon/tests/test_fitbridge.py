@@ -599,8 +599,8 @@ acc = gl["accessors"][gl["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_0
 bv = gl["bufferViews"][acc["bufferView"]]
 guv = np.frombuffer(glb[binstart + bv["byteOffset"]:binstart + bv["byteOffset"] + bv["byteLength"]], np.float32).reshape(-1, 2)
 wuv = np.array(wire["uvs"]).reshape(-1, 2)
-if not np.allclose(guv[:, 1], 1 - wuv[:, 1], atol=1e-6) or len(gl["images"]) != 2 or "normalTexture" not in gl["materials"][0]:
-    fail("glb uv flip / embedded colour + normal maps")
+if not np.allclose(guv, wuv, atol=1e-6) or len(gl["images"]) != 2 or "normalTexture" not in gl["materials"][0]:
+    fail("glb uvs must equal the wire's (glTF's V starts at the top too) / embedded colour + normal maps")
 import tempfile  # noqa: E402
 gpath = os.path.join(tempfile.mkdtemp(), "check.glb")
 open(gpath, "wb").write(glb)
@@ -636,7 +636,7 @@ upload.start(6, manifest, wire, pixels, "", "User", "123")
 if upload.public()["state"] != "off":
     fail("no key = off")
 _oc.shutdown()
-done.append("Open Cloud (fake): glb straight from the wire arrays (V flipped, maps embedded), multipart request, "
+done.append("Open Cloud (fake): glb straight from the wire arrays (same V as the wire, maps embedded), multipart request, "
             "key only in x-api-key, poll -> model 777 in manifest + hello, cache reuse, Roblox error shown, no key = off")
 
 # --- Studio POSTs: rules, rig, result
