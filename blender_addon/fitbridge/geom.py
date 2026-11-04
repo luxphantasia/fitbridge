@@ -200,3 +200,69 @@ def pow2(n):
 
 def fov_ok(deg):
     return math.isfinite(deg) and 1 < deg < 179
+
+
+# ---------------------------------------------------------------------------------------------------- texture shrink
+
+def send_target(lim, pbr):
+    """longest side a map may have when sent: the spec's target for this kind of item, capped by Roblox's live limit
+    when it's known (rules cached before max_pbr_texture_size existed simply have no PBR cap)"""
+    target = int(lim["texture_size_on_send"]["pbr" if pbr else "color_only"])
+    cap = lim.get("max_pbr_texture_size" if pbr else "max_texture_size")
+    return min(target, int(cap)) if cap else target
+
+
+def send_size(w, h, target):
+    """(w, h) after halving until the longest side fits, so the aspect ratio and power-of-two sizes stay"""
+    while max(w, h) > target and max(w, h) > 1:
+        w, h = max(w // 2, 1), max(h // 2, 1)
+    return w, h
+
+
+def _box(a, w2, h2):
+    """average a (h, w, ...) float array down to (h2, w2, ...), any size ratio"""
+    h, w = a.shape[:2]
+    ys, xs = np.arange(h2) * h // h2, np.arange(w2) * w // w2
+    a = np.add.reduceat(np.add.reduceat(a, ys, axis=0), xs, axis=1)
+    ny, nx = np.diff(np.append(ys, h)), np.diff(np.append(xs, w))
+    n = np.outer(ny, nx).astype(np.float32)
+    return a / (n[..., None] if a.ndim == 3 else n)
+
+
+_BYTES = np.arange(256, dtype=np.float64) / 255
+_SRGB_TO_LINEAR = np.where(_BYTES <= 0.04045, _BYTES / 12.92, ((_BYTES + 0.055) / 1.055) ** 2.4).astype(np.float32)
+
+
+def _to_srgb(x):
+    x = np.clip(x, 0, 1)
+    return np.where(x <= 0.0031308, x * 12.92, 1.055 * np.power(x, 1 / 2.4) - 0.055)
+
+
+def shrink_rgba(rgba, kind, target):
+    """a copy of an RGBA8 map (h, w, 4) that fits target, or rgba itself when it already does. kind = the map name:
+    colour averages as light and ignores what's under transparent pixels, normals stay unit length (averaging alone
+    would flatten them), the rest are plain data."""
+    h, w = rgba.shape[:2]
+    w2, h2 = send_size(w, h, target)
+    if (w2, h2) == (w, h):
+        return rgba
+    alpha = rgba[..., 3].astype(np.float32) / 255
+    if kind == "color":
+        lin = _SRGB_TO_LINEAR[rgba[..., :3]]
+        rgb = _box(lin, w2, h2)
+        if alpha.min() < 1:
+            total = _box(alpha, w2, h2)[..., None]
+            weighted = _box(lin * alpha[..., None], w2, h2)
+            seen = total > 0                         # fully transparent cells keep the plain average
+            rgb = np.where(seen, weighted / np.where(seen, total, 1), rgb)
+        rgb = _to_srgb(rgb)
+    elif kind == "normal":
+        n = _box(rgba[..., :3].astype(np.float32) / 255 * 2 - 1, w2, h2)
+        length = np.linalg.norm(n, axis=2, keepdims=True)
+        n = np.where(length > 1e-6, n / np.where(length > 1e-6, length, 1), np.array((0, 0, 1), np.float32))
+        rgb = (n + 1) / 2
+    else:
+        rgb = _box(rgba[..., :3].astype(np.float32) / 255, w2, h2)
+    out = np.dstack((rgb, _box(alpha, w2, h2)))
+    return np.ascontiguousarray((np.clip(out, 0, 1) * 255 + 0.5).astype(np.uint8))
+

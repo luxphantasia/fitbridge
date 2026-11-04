@@ -278,17 +278,20 @@ def evaluate(context):
         checks.append(_check("uv_in_range", "fail" if bad else "pass",
                              f"{bad} UV corners outside 0-1" if bad else "UVs inside 0-1"))
 
-    mts = int(lim["max_texture_size"])
+    res["pbr"] = any(tex[k] is not None for k in ("normal", "roughness", "metalness"))
+    target = geom.send_target(lim, res["pbr"])
     if not images:
         checks.append(_check("texture_size", "pass", "No textures"))
         checks.append(_check("texture_pow2", "pass", "No textures"))
     else:
-        big = [f"{k} {v.size[0]}x{v.size[1]}" for k, v in images if max(v.size) > mts]
         npot = [f"{k} {v.size[0]}x{v.size[1]}" for k, v in images
                 if not (geom.pow2(v.size[0]) and geom.pow2(v.size[1]))]
-        sizes = ", ".join(f"{k} {v.size[0]}x{v.size[1]}" for k, v in images)
-        checks.append(_check("texture_size", "fail" if big else "pass",
-                             f"Over {mts}: {', '.join(big)}" if big else sizes))
+        # never a failure: Send shrinks the copy it sends
+        sizes = []
+        for k, v in images:
+            w, h = geom.send_size(v.size[0], v.size[1], target)
+            sizes.append(f"{k} {v.size[0]}x{v.size[1]}" + (f", sends as {w}x{h}" if (w, h) != tuple(v.size) else ""))
+        checks.append(_check("texture_size", "pass", "; ".join(sizes)))
         checks.append(_check("texture_pow2", "fail" if npot else "pass",
                              f"Not a power of two: {', '.join(npot)}" if npot else "Power-of-two sizes"))
 
@@ -310,7 +313,6 @@ def evaluate(context):
         if c["status"] == "fail" and sev != "block":
             c["status"] = "warn"
     res["ok"] = not any(c["status"] == "fail" for c in checks)
-    res["pbr"] = any(tex[k] is not None for k in ("normal", "roughness", "metalness"))
     res["mesh"] = m
     LIVE["result"] = res
     return res
@@ -361,11 +363,12 @@ def build_package(context, res, revision, override):
     pixels = {}
     tdir = spec.cache_dir() / "textures"
     tdir.mkdir(exist_ok=True)
+    target = geom.send_target(spec.limits(), res["pbr"])
     for k, img in res["textures"].items():
         if img is None:
             textures[k] = None
             continue
-        rgba = image_rgba8(img)
+        rgba = geom.shrink_rgba(image_rgba8(img), k, target)     # only this copy: the image in Blender stays as it is
         pixels[k] = rgba
         sha = hashlib.sha256(rgba.tobytes()).hexdigest()
         png = tdir / f"{k}.png"

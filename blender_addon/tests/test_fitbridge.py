@@ -1,6 +1,7 @@
 """FitBridge Blender addon, end to end in a background Blender (run with tests/run.sh): live checks, the ghost box
 fit, Send to Studio over the real HTTP bridge, Studio's rules / rig / result POSTs, the thumbnail camera.
 Exits non-zero on the first failure."""
+import hashlib
 import json
 import math
 import os
@@ -648,13 +649,94 @@ res = evaluate.evaluate(ctx)
 by = {c["id"]: c for c in res["checks"]}
 if res["bounds_source"] != "live" or by["triangles"]["status"] != "fail" or spec.live_rules()["matched_scale"] != "Classic":
     fail(f"live rules should win: {res['bounds_source']} {by['triangles']} {spec.live_rules().get('matched_scale')}")
+# Send shrinks oversized maps: colour only to 1024, PBR to 2048, each capped by the live limit
 big = image("big", 2048, 2048, (1, 1, 1, 1))
 tc.image = big
 res = evaluate.evaluate(ctx)
-if {c["id"]: c for c in res["checks"]}["texture_size"]["status"] != "fail":
-    fail("a 2048 texture must fail against the live 1024 limit")
+size = {c["id"]: c for c in res["checks"]}["texture_size"]
+if not res["pbr"] or size["status"] != "pass" or "sends as" in size["message"]:
+    fail(f"a PBR item keeps 2048 (no live PBR cap known): {size}")
+_b, pman, _m, ppix = evaluate.build_package(ctx, res, 900, True)
+if pman["textures"]["color"]["width"] != 2048 or ppix["color"].shape[:2] != (2048, 2048):
+    fail(f"PBR colour map should stay 2048: {pman['textures']['color']}")
+nlink = next(l for l in nt.links if l.to_socket == bsdf.inputs["Normal"])
+nt.links.remove(nlink)
+res = evaluate.evaluate(ctx)
+size = {c["id"]: c for c in res["checks"]}["texture_size"]
+if res["pbr"] or size["status"] != "pass" or "color 2048x2048, sends as 1024x1024" not in size["message"]:
+    fail(f"colour only over 1024 should pass and say what it sends: {size}")
+sblobs, sman, smesh, spix = evaluate.build_package(ctx, res, 901, True)
+st_ = sman["textures"]["color"]
+stex = json.loads(sblobs["/v1/package/texture/color"])
+if (st_["width"], st_["height"]) != (1024, 1024) or spix["color"].shape != (1024, 1024, 4) or \
+        st_["sha256"] != hashlib.sha256(spix["color"].tobytes()).hexdigest() or st_["sha256"] == pman["textures"]["color"]["sha256"]:
+    fail(f"the manifest must describe the shrunk copy: {st_}")
+if (stex["width"], stex["height"], stex["sha256"]) != (1024, 1024, st_["sha256"]) or \
+        len(base64.b64decode(stex["rgba_base64"])) != 1024 * 1024 * 4:
+    fail("the texture endpoint must serve the shrunk copy")
+
+
+def png_size(data, at=0):
+    at = data.index(b"\x89PNG", at)
+    return struct.unpack(">II", data[at + 16:at + 24])
+
+
+with open(stex["png_path"], "rb") as f:
+    if png_size(f.read()) != (1024, 1024):
+        fail("the PNG file must be the shrunk copy")
+if png_size(upload.write_glb(smesh, spix, sman["pbr"])) != (1024, 1024):
+    fail("the uploaded GLB must carry the shrunk copy")
+if tuple(big.size) != (2048, 2048) or tuple(big.pixels[:4]) != (1, 0, 0, 1):
+    fail("the image in Blender must not change")
+nt.links.new(nm.outputs["Normal"], bsdf.inputs["Normal"])
 tc.image = bpy.data.images["col"]
 bpy.data.images.remove(big)
+
+# which target, live caps, halving
+T = {"texture_size_on_send": {"color_only": 1024, "pbr": 2048}}
+for lim, pbr, want in ((T, False, 1024), (T, True, 2048), ({**T, "max_texture_size": 512}, False, 512),
+                       ({**T, "max_texture_size": 4096}, False, 1024), ({**T, "max_texture_size": 512}, True, 2048),
+                       ({**T, "max_pbr_texture_size": 1024}, True, 1024)):
+    if geom.send_target(lim, pbr) != want:
+        fail(f"send_target {lim} {pbr} should be {want}")
+if geom.send_size(4096, 1024, 1024) != (1024, 256) or geom.send_size(512, 512, 1024) != (512, 512) or \
+        geom.send_size(4096, 1, 1024) != (1024, 1):
+    fail("send_size should halve both sides until the longest fits")
+# how each kind of map averages
+small = np.zeros((2, 2, 4), np.uint8)
+if geom.shrink_rgba(small, "color", 2) is not small:
+    fail("a map that fits is passed through untouched")
+checker = np.zeros((2, 2, 4), np.uint8)
+checker[..., 3] = 255
+checker[0, 0, :3] = checker[1, 1, :3] = 255
+c = geom.shrink_rgba(checker, "color", 1)[0, 0]
+if not 186 <= c[0] <= 189 or c[3] != 255:
+    fail(f"black + white colour should average as light (188), not 128: {c}")
+if geom.shrink_rgba(checker, "roughness", 1)[0, 0, 0] != 128:
+    fail("data maps average plainly")
+for col in ((0, 0, 255), (17, 99, 200), (255, 255, 255)):
+    solid = np.full((4, 4, 4), 255, np.uint8)
+    solid[..., :3] = col
+    if tuple(geom.shrink_rgba(solid, "color", 2)[0, 0, :3]) != col:
+        fail(f"a solid colour must stay exactly {col}")
+fringe = np.zeros((1, 2, 4), np.uint8)
+fringe[0, 0] = (255, 0, 0, 255)
+fringe[0, 1] = (0, 255, 0, 0)
+c = geom.shrink_rgba(fringe, "color", 1)[0, 0]
+if c[0] != 255 or c[1] != 0 or c[3] != 128:
+    fail(f"colour under transparent pixels mustn't bleed in: {c}")
+nrm = np.full((1, 2, 4), 255, np.uint8)
+nrm[0, 0, :3] = ((np.array((0.6, 0, 0.8)) + 1) / 2 * 255 + 0.5).astype(np.uint8)
+nrm[0, 1, :3] = ((np.array((-0.6, 0, 0.8)) + 1) / 2 * 255 + 0.5).astype(np.uint8)
+n = geom.shrink_rgba(nrm, "normal", 1)[0, 0, :3] / 255 * 2 - 1
+if abs(np.linalg.norm(n) - 1) > 0.02 or n[2] < 0.98:
+    fail(f"a shrunk normal must be unit length: {n}")
+flat = np.full((4, 4, 4), 255, np.uint8)
+flat[..., :2] = 128
+if tuple(geom.shrink_rgba(flat, "normal", 2)[0, 0, :3]) != (128, 128, 255):
+    fail("a flat normal map must stay flat")
+done.append("Send shrinks: colour only 2048 -> 1024 (check passes and says so; manifest, endpoint, PNG and GLB all 1024; "
+            "new sha), PBR stays 2048, live caps win; colour averages as light without fringes, normals stay unit length")
 if spec.rigid_allowed("Eyebrow") or "Eyebrow" in spec.RIGID_TYPES or not spec.rigid_allowed("Hat"):
     fail("Eyebrow isn't rigid (spec + live), Hat is")
 if "Eyebrow" in [i.identifier for i in st.bl_rna.properties["acc_type"].enum_items]:
