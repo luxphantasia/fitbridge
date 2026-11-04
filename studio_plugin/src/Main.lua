@@ -573,6 +573,61 @@ local function standInFrontOfCamera(rig: Model)
 	end
 end
 
+local WEAR_SCRIPT_NAME = "FitBridgeWear"
+local WEAR_SCRIPT = [[
+-- Added by FitBridge. In Play, touch this dummy to wear what it's wearing.
+local rig = script.Parent
+
+-- Handles have to stay unanchored for Roblox, so in Play they'd fall. Hold ours in place.
+local worn = {}
+for _, accessory in rig.Parent:GetChildren() do
+	local handle = accessory:IsA("Accessory") and accessory:FindFirstChild("Handle")
+	local attachment = handle and handle:FindFirstChildOfClass("Attachment")
+	local seat = attachment and rig:FindFirstChild(attachment.Name, true)
+	if seat and (seat.WorldPosition - attachment.WorldPosition).Magnitude < 0.1 then
+		handle.Anchored = true
+		table.insert(worn, accessory)
+	end
+end
+
+local given = setmetatable({}, { __mode = "k" })
+local function onTouched(hit)
+	local character = hit:FindFirstAncestorOfClass("Model")
+	local humanoid = character and character ~= rig and character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or given[character] then
+		return
+	end
+	given[character] = true
+	for _, accessory in worn do
+		local copy = accessory:Clone()
+		copy.Handle.Anchored = false
+		humanoid:AddAccessory(copy)
+	end
+end
+
+for _, part in rig:GetDescendants() do
+	if part:IsA("BasePart") then
+		part.Touched:Connect(onTouched)
+	end
+end
+]]
+
+-- Returns a message if Studio won't let the plugin write the script.
+local function addWearScript(rig: Model): string?
+	local script = rig:FindFirstChild(WEAR_SCRIPT_NAME) :: Script? or Instance.new("Script")
+	local ok, err = pcall(function()
+		if script.Source ~= WEAR_SCRIPT then
+			script.Source = WEAR_SCRIPT
+		end
+	end)
+	if not ok then
+		return "Touching the dummy won't equip its accessories: " .. tostring(err)
+	end
+	script.Name = WEAR_SCRIPT_NAME
+	script.Parent = rig
+	return nil
+end
+
 local function dummyFor(scaleName, moveToCamera)
 	local rig = nil
 	for _, m in folder():GetChildren() do
@@ -860,6 +915,10 @@ local function build(manifest, moveToCamera)
 	-- Not Humanoid:AddAccessory: wearing adds an AccessoryRigidConstraint that validation doesn't strip.
 	-- No attributes on the Accessory either: Roblox's AttributesAllowed check rejects them.
 	local rig = dummyFor(manifest.body_scale, moveToCamera)
+	local wearErr = addWearScript(rig)
+	if wearErr then
+		table.insert(problems, wearErr)
+	end
 	for _, old in folder():GetChildren() do
 		if old:IsA("Accessory") and old.Name == manifest.name then
 			old:Destroy()
