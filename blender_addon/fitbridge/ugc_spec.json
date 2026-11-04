@@ -155,6 +155,8 @@
   "marketplace_properties": {
     "Material": "Plastic",
     "Transparency": 0,
+    "Color": [163, 162, 165],
+    "Massless": false,
     "VertexColor": [1, 1, 1],
     "allowed_handle_children": ["Attachment", "SurfaceAppearance", "WrapLayer"],
     "allowed_accessory_children": ["Handle", "ThumbnailConfiguration"]

@@ -805,11 +805,11 @@ local function build(manifest, moveToCamera)
 	handle.Size = v3(manifest.mesh.size)
 	handle.Material = Enum.Material.Plastic
 	handle.Transparency = 0
-	handle.Color = Color3.new(1, 1, 1)
+	handle.Color = Color3.fromRGB(table.unpack(SPEC.marketplace_properties.Color)) -- the texture shows over it
 	handle.CanCollide = false
 	handle.CanTouch = false
 	handle.CanQuery = false
-	handle.Massless = true
+	handle.Massless = SPEC.marketplace_properties.Massless
 	handle.Anchored = false
 
 	local attachment = Instance.new("Attachment")
