@@ -590,18 +590,18 @@ for _, accessory in rig.Parent:GetChildren() do
 	end
 end
 
-local given = setmetatable({}, { __mode = "k" })
 local function onTouched(hit)
 	local character = hit:FindFirstAncestorOfClass("Model")
 	local humanoid = character and character ~= rig and character:FindFirstChildOfClass("Humanoid")
-	if not humanoid or given[character] then
+	if not humanoid then
 		return
 	end
-	given[character] = true
 	for _, accessory in worn do
-		local copy = accessory:Clone()
-		copy.Handle.Anchored = false
-		humanoid:AddAccessory(copy)
+		if not character:FindFirstChild(accessory.Name) then
+			local copy = accessory:Clone()
+			copy.Handle.Anchored = false
+			humanoid:AddAccessory(copy)
+		end
 	end
 end
 
