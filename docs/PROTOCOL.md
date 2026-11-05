@@ -199,5 +199,22 @@ Studio plugins can't upload assets yet (`CreateAssetAsync` reports "not availabl
 
 **GLB writing:** write the `.glb` straight from the wire arrays with a small glTF writer (positions as-is, `v_gltf = v_wire`, because glTF's V starts at the top like the wire's, PNG images embedded), not with Blender's glTF exporter. That way no axis conversion happens behind our back, and the orientation check in Studio only has to catch Roblox's own importer behaviour.
 
+## Sets: a hat and its recolours
+
+**Send all colours** in Blender uploads a hat and every recolour sharing its mesh, then hands Studio the whole set. Every colour has finished uploading before Studio hears about it, so a set never arrives half done.
+
+- `/v1/hello` gains `set_revision`. It starts at 0 and goes up when a set is ready. When it goes up, fetch `GET /v1/set` and build it. Don't build one already at this revision on first connect, the same as `sent_revision`.
+- `GET /v1/set`:
+```json
+{ "protocol": 1, "revision": 3, "family": "Helmet 1", "name": "Tan Fur Tactical Hat",
+  "items": [ { "name": "Tan Fur Tactical Hat", "colour": null, "is_original": true, "...": "..." },
+             { "name": "Arctic Tan Fur Tactical Hat", "colour": "Arctic", "is_original": false, "...": "..." } ] }
+```
+- Each entry in `items` is a full manifest in the `/v1/package` shape, with `upload.state` always `"done"` and its own `upload.model_asset_id`, plus `colour` and `is_original`. The original comes first. `name` is the final item name, at most 50 characters.
+- Every colour has the same `accessory_type`, `attachment`, `body_scale`, `mesh` and `thumbnail`. Only `name`, `colour`, `textures`, `pbr` and `upload` differ.
+- `GET /v1/set/mesh` is the shared mesh, in the `/v1/package/mesh` shape. `GET /v1/set/item/{index}/texture/{map}` is one colour's texture, in the `/v1/package/texture/{map}` shape.
+- **Building:** a folder in Workspace named after `name`, holding one dummy per item in a row in `items` order, each wearing that item. Sending the same `family` again replaces that folder in the same place. A different `family` gets its own folder.
+- **Result:** `POST /v1/set/result` with `{ "protocol": 1, "revision": 3, "ok": true, "message": "Built 7 colours. Right-click each → Save to Roblox." }`. Blender shows the message like a `/v1/package/result` one.
+
 ## Errors
 Any non-2xx response has `{ "protocol": 1, "error": "human readable sentence" }`. Show that sentence as-is.

@@ -236,14 +236,14 @@ def in_use(context):
     return any(bpy.data.collections.get(n) is not None for n in (R15_COLL, R6_COLL))
 
 
-def evaluate(context):
-    """run every check on the current accessory -> a result dict (also kept in LIVE)"""
+def evaluate(context, ob=None, publish=True):
+    """run every check on the current accessory (or on ob) -> a result dict (kept in LIVE unless publish is False)"""
     st = context.scene.fitbridge
     scale, acc_type, att = st.body_scale, st.acc_type, st.attachment
     lim = spec.limits()
     res = {"checks": [], "ok": False, "box": None, "inside": None, "over_lines": [], "object": None,
            "scale": scale, "acc_type": acc_type, "attachment": att}
-    ob = target_object(context)
+    ob = ob or target_object(context)
     rig_data = spec.rig(scale)
     A = spec.attachment_frame(rig_data, att)
     bsize, boff, bsrc = spec.bounds(acc_type, att, scale)
@@ -253,7 +253,8 @@ def evaluate(context):
         res["A"] = A
     if ob is None:
         res["checks"].append(_check("single_mesh", "fail", "Pick a mesh object (or make one active)"))
-        LIVE["result"] = res
+        if publish:
+            LIVE["result"] = res
         return res
     res["object"] = ob.name
     faces = len(ob.data.polygons)
@@ -262,7 +263,8 @@ def evaluate(context):
         res["checks"].append(_check("triangles", "fail", f"{faces:,} faces: far over {mx:,} triangles "
                                                          "(live checks paused for this mesh)"))
         res["heavy"] = True
-        LIVE["result"] = res
+        if publish:
+            LIVE["result"] = res
         return res
     dg = context.evaluated_depsgraph_get()
     m = read_mesh(ob, dg)
@@ -352,7 +354,8 @@ def evaluate(context):
             c["status"] = "warn"
     res["ok"] = not any(c["status"] == "fail" for c in checks)
     res["mesh"] = m
-    LIVE["result"] = res
+    if publish:
+        LIVE["result"] = res
     return res
 
 
@@ -391,6 +394,31 @@ def build_mesh(res):
             "triangles": idx.tolist()}
 
 
+def texture_entry(k, rgba, tdir, prefix=""):
+    """(manifest entry, endpoint body, pixels) for one map, with its PNG written. No bpy: safe on a thread."""
+    sha = hashlib.sha256(rgba.tobytes()).hexdigest()
+    png = tdir / f"{prefix}{k}.png"
+    write_png(png, rgba)
+    h, w = rgba.shape[:2]
+    blob = {"protocol": 1, "sha256": sha, "width": w, "height": h,
+            "rgba_base64": base64.b64encode(rgba.tobytes()).decode(), "png_path": str(png)}
+    return {"sha256": sha, "width": w, "height": h}, blob, rgba
+
+
+def manifest_fields(context, res, g):
+    """the part of a manifest that comes from the fit and the shot, shared by every colour of a hat"""
+    from . import thumb
+    cam_cf = thumb.camera_cframe(res, g)
+    return {
+        "accessory_type": SPEC_TYPE(res["acc_type"]), "attachment": res["attachment"], "body_scale": res["scale"],
+        "mesh": {"triangles": len(res["mesh"]["tri_loops"]), "size": [float(x) for x in res["fit"]["size"]],
+                 "offset": [float(x) for x in res["fit"]["offset"]]},
+        "thumbnail": {"camera_cframe": [round(x, 6) for x in cam_cf], "field_of_view": round(float(thumb.FOV), 4)},
+        "checks": [{k: c[k] for k in ("id", "status", "message")} for c in res["checks"]],
+        "spec_source": spec.spec_source(),
+    }
+
+
 def build_package(context, res, revision, override):
     """everything Studio pulls, as ready-to-send JSON bytes per endpoint (built here on the main thread)"""
     st = context.scene.fitbridge
@@ -406,35 +434,23 @@ def build_package(context, res, revision, override):
         if img is None:
             textures[k] = None
             continue
-        rgba = geom.shrink_rgba(image_rgba8(img), k, target)     # only this copy: the image in Blender stays as it is
-        pixels[k] = rgba
-        sha = hashlib.sha256(rgba.tobytes()).hexdigest()
-        png = tdir / f"{k}.png"
-        write_png(png, rgba)
-        h, w = rgba.shape[:2]
-        textures[k] = {"sha256": sha, "width": w, "height": h}
-        blobs[f"/v1/package/texture/{k}"] = {"protocol": 1, "sha256": sha, "width": w, "height": h,
-                                             "rgba_base64": base64.b64encode(rgba.tobytes()).decode(),
-                                             "png_path": str(png)}
+        # only this copy shrinks: the image in Blender stays as it is
+        textures[k], blob, pixels[k] = texture_entry(k, geom.shrink_rgba(image_rgba8(img), k, target), tdir)
+        blobs[f"/v1/package/texture/{k}"] = blob
     from . import thumb
     g, _ob = thumb.owner(context)
     thumb.sync(context, res)
-    cam_cf = thumb.camera_cframe(res, g)
-    fov = thumb.FOV
+    fields = manifest_fields(context, res, g)
     sendable = res["ok"] or override
     manifest = {
         "protocol": 1, "revision": revision,
         "name": st.item_name or res["object"],
-        "accessory_type": SPEC_TYPE(res["acc_type"]), "attachment": res["attachment"], "body_scale": res["scale"],
-        "mesh": {"sha256": mesh_sha, "triangles": len(mesh["triangles"]) // 3,
-                 "vertices": len(mesh["positions"]) // 3,
-                 "size": [float(x) for x in res["fit"]["size"]], "offset": [float(x) for x in res["fit"]["offset"]]},
+        **fields,
+        "mesh": {**fields["mesh"], "sha256": mesh_sha, "triangles": len(mesh["triangles"]) // 3,
+                 "vertices": len(mesh["positions"]) // 3},
         "textures": textures,
         "pbr": bool(res["pbr"]),
-        "thumbnail": {"camera_cframe": [round(x, 6) for x in cam_cf], "field_of_view": round(float(fov), 4)},
-        "checks": [{k: c[k] for k in ("id", "status", "message")} for c in res["checks"]],
         "sendable": bool(sendable), "override": bool(override),
-        "spec_source": spec.spec_source(),
     }
     blobs["/v1/package/mesh"] = {"protocol": 1, "revision": revision, "sha256": mesh_sha, **mesh}
     # the manifest itself is served as a dict: its upload block changes while the upload runs
