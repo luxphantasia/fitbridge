@@ -24,6 +24,7 @@ local FOLDER_NAME = "FitBridge"
 local ATTR = "FitBridge"
 local FAMILY_ATTR = ATTR .. "Family" -- on a colour set's folder in Workspace
 local SET_INDEX_ATTR = ATTR .. "SetIndex" -- on each dummy in that folder, for its place in the row
+local ITEM_ATTR = ATTR .. "Item" -- on a dummy in the single-build folder: the name of the item it wears
 
 ---------------------------------------------------------------- settings + cache
 
@@ -579,6 +580,73 @@ local function groundInFrontOfCamera(height: number, width: number?): (Vector3, 
 	return Vector3.new(spot.X, if floor then floor.Position.Y else hit.Position.Y, spot.Z), forward
 end
 
+-- The world axis closest to this direction, flat on the ground.
+local function nearestAxis(direction: Vector3): Vector3
+	local x, z = Geometry.nearestAxis(direction.X, direction.Z)
+	return Vector3.new(x, 0, z)
+end
+
+-- Feet for a row on free ground, first on the left: beside any dummies already standing there if it fits,
+-- otherwise behind them. Returns the world axis closest to the camera's view, for the row and its dummies to
+-- line up with. Ignores the folder being replaced and the rig being moved.
+local function rowInFrontOfCamera(count: number, spacing: number, height: number, replacing: Folder?, moving: Model?)
+	local centre, view = groundInFrontOfCamera(height, count * spacing)
+	local forward = nearestAxis(view)
+	local right = forward:Cross(Vector3.yAxis)
+	local taken = {}
+	for _, f in ownFolders() do
+		if f ~= replacing then
+			for _, m in f:GetChildren() do
+				if m:IsA("Model") and m ~= moving then
+					table.insert(taken, m:GetPivot().Position * Vector3.new(1, 0, 1))
+				end
+			end
+		end
+	end
+	local function isClear(spot: Vector3)
+		for _, p in taken do
+			if (spot * Vector3.new(1, 0, 1) - p).Magnitude < spacing - 0.01 then
+				return false
+			end
+		end
+		return true
+	end
+	local spots = {}
+	local function fits(side: number, back: number)
+		local clear = true
+		for i = 1, count do
+			spots[i] = centre + right * ((i - (count + 1) / 2 + side) * spacing) + forward * (back * spacing)
+			clear = clear and isClear(spots[i])
+		end
+		return clear
+	end
+	local found = false
+	for back = 0, 9 do
+		for _, side in { 0, 1, -1, 2, -2 } do
+			found = fits(side, back)
+			if found then
+				break
+			end
+		end
+		if found then
+			break
+		end
+	end
+	local params = groundRayParams()
+	local top = workspace.CurrentCamera.CFrame.Position.Y
+	for i, spot in spots do
+		local floor = workspace:Raycast(Vector3.new(spot.X, top, spot.Z), -Vector3.yAxis * (CAMERA_REACH * 2), params)
+		spots[i] = Vector3.new(spot.X, if floor then floor.Position.Y else centre.Y, spot.Z)
+	end
+	return spots, forward
+end
+
+-- Room for a rig and what it wears, side by side with the next one.
+local function dummySpacing(rig: Model, meshSize: Vector3)
+	local rigSize = rig:GetExtentsSize()
+	return math.max(rigSize.X, rigSize.Z, meshSize.X, meshSize.Z) + ROW_GAP
+end
+
 -- Stands the rig at `feet`, looking back along `forward`.
 local function standAt(rig: Model, feet: Vector3, forward: Vector3)
 	rig:PivotTo(CFrame.lookAt(feet, feet - forward))
@@ -586,17 +654,28 @@ local function standAt(rig: Model, feet: Vector3, forward: Vector3)
 	rig:PivotTo(rig:GetPivot() + Vector3.yAxis * (feet.Y - (box.Position.Y - size.Y / 2)))
 end
 
--- Stands the rig facing the camera. Accessories already on it go with it.
-local function standInFrontOfCamera(rig: Model)
+-- Is this accessory sitting on this rig's matching attachment?
+local function isSeatedOn(rig: Model, accessory: Instance)
+	local handle = accessory:IsA("Accessory") and accessory:FindFirstChild("Handle")
+	local attachment = handle and handle:FindFirstChildOfClass("Attachment")
+	local seat = attachment and rig:FindFirstChild(attachment.Name, true)
+	return if seat then (seat.WorldPosition - attachment.WorldPosition).Magnitude < 0.1 else false
+end
+
+-- Stands the rig facing the camera on free ground. Accessories already on it go with it.
+local function standInFrontOfCamera(rig: Model, spacing: number)
 	local before = rig:GetPivot()
-	local feet, forward = groundInFrontOfCamera(rig:GetExtentsSize().Y)
-	standAt(rig, feet, forward)
-	local moved = rig:GetPivot() * before:Inverse()
+	local worn = {}
 	for _, acc in folder():GetChildren() do
-		local handle = acc:IsA("Accessory") and acc:FindFirstChild("Handle") :: BasePart?
-		if handle and (handle.Position - before.Position).Magnitude < 10 then
-			handle.CFrame = moved * handle.CFrame
+		if isSeatedOn(rig, acc) then
+			table.insert(worn, acc.Handle)
 		end
+	end
+	local spots, forward = rowInFrontOfCamera(1, spacing, rig:GetExtentsSize().Y, nil, rig)
+	standAt(rig, spots[1], forward)
+	local moved = rig:GetPivot() * before:Inverse()
+	for _, handle in worn do
+		handle.CFrame = moved * handle.CFrame
 	end
 end
 
@@ -604,7 +683,7 @@ local WEAR_SCRIPT_NAME = "FitBridgeWear"
 local WEAR_SCRIPT = [[
 -- Added by FitBridge. In Play, touch this dummy to wear what it's wearing.
 local rig = script.Parent
-local from = rig.Parent:GetFullName()
+local family = rig.Parent:GetAttribute("FitBridgeFamily") -- set when this dummy is in a row of colours
 
 -- Handles have to stay unanchored for Roblox, so in Play they'd fall. Hold ours in place.
 local worn = {}
@@ -628,7 +707,7 @@ local function onTouched(hit)
 	end
 	-- In a row of colours, trying another one swaps it instead of stacking them on one head.
 	for _, other in character:GetChildren() do
-		if other:GetAttribute("FitBridgeFrom") == from and not wornNames[other.Name] then
+		if family and other:GetAttribute("FitBridgeFamily") == family and not wornNames[other.Name] then
 			other:Destroy()
 		end
 	end
@@ -636,7 +715,7 @@ local function onTouched(hit)
 		if not character:FindFirstChild(accessory.Name) then
 			local copy = accessory:Clone()
 			copy.Handle.Anchored = false
-			copy:SetAttribute("FitBridgeFrom", from)
+			copy:SetAttribute("FitBridgeFamily", family)
 			humanoid:AddAccessory(copy)
 		end
 	end
@@ -665,21 +744,27 @@ local function addWearScript(rig: Model): string?
 	return nil
 end
 
-local function dummyFor(scaleName, moveToCamera)
+-- Each item has its own dummy. Sending it again reuses that one, so its rebuild after uploading does too.
+local function dummyFor(manifest, moveToCamera)
 	local rig = nil
 	for _, m in folder():GetChildren() do
-		if m:GetAttribute(ATTR .. "Scale") == scaleName then
-			rig = m
-			break
+		if m:GetAttribute(ITEM_ATTR) == manifest.name then
+			if m:GetAttribute(ATTR .. "Scale") == manifest.body_scale then
+				rig = m
+			else
+				m:Destroy()
+			end
 		end
 	end
 	local isNew = rig == nil
 	if isNew then
-		rig = makeRig(scaleName)
+		rig = makeRig(manifest.body_scale)
+		rig.Name = manifest.name .. " dummy"
+		rig:SetAttribute(ITEM_ATTR, manifest.name)
 		rig.Parent = folder()
 	end
 	if isNew or moveToCamera then
-		standInFrontOfCamera(rig)
+		standInFrontOfCamera(rig, dummySpacing(rig, v3(manifest.mesh.size)))
 	end
 	return rig
 end
@@ -978,7 +1063,7 @@ local function build(manifest, moveToCamera)
 	-- Replace any earlier build of this item, then seat it on the matching test avatar's attachment.
 	-- Not Humanoid:AddAccessory: wearing adds an AccessoryRigidConstraint that validation doesn't strip.
 	-- No attributes on the Accessory either: Roblox's AttributesAllowed check rejects them.
-	local rig = dummyFor(manifest.body_scale, moveToCamera)
+	local rig = dummyFor(manifest, moveToCamera)
 	local wearErr = addWearScript(rig)
 	if wearErr then
 		table.insert(problems, wearErr)
@@ -1022,47 +1107,6 @@ local function setFolderFor(family)
 		end
 	end
 	return nil
-end
-
--- Feet for a row facing the camera, first on the left, behind any dummies already standing there.
-local function rowInFrontOfCamera(count: number, spacing: number, height: number, replacing: Folder?)
-	local centre, forward = groundInFrontOfCamera(height, count * spacing)
-	local right = forward:Cross(Vector3.yAxis)
-	local taken = {}
-	for _, f in ownFolders() do
-		if f ~= replacing then
-			for _, m in f:GetChildren() do
-				if m:IsA("Model") then
-					table.insert(taken, m:GetPivot().Position * Vector3.new(1, 0, 1))
-				end
-			end
-		end
-	end
-	local function isClear(spot: Vector3)
-		for _, p in taken do
-			if (spot * Vector3.new(1, 0, 1) - p).Magnitude < spacing then
-				return false
-			end
-		end
-		return true
-	end
-	local row = 0
-	local spots = {}
-	repeat
-		local clear = true
-		for i = 1, count do
-			spots[i] = centre + right * ((i - (count + 1) / 2) * spacing) + forward * (row * spacing)
-			clear = clear and isClear(spots[i])
-		end
-		row += 1
-	until clear or row == 10
-	local params = groundRayParams()
-	local top = workspace.CurrentCamera.CFrame.Position.Y
-	for i, spot in spots do
-		local floor = workspace:Raycast(Vector3.new(spot.X, top, spot.Z), -Vector3.yAxis * (CAMERA_REACH * 2), params)
-		spots[i] = Vector3.new(spot.X, if floor then floor.Position.Y else centre.Y, spot.Z)
-	end
-	return spots, forward
 end
 
 -- Where the old set's dummies stood, in row order, so a resend lands in the same place.
@@ -1130,16 +1174,14 @@ local function buildSet(set, moveToCamera)
 	if wearErr then
 		table.insert(notes, wearErr)
 	end
-	local rigSize = template:GetExtentsSize()
-	local meshSize = v3(first.mesh.size)
-	local spacing = math.max(rigSize.X, rigSize.Z, meshSize.X, meshSize.Z) + ROW_GAP
+	local spacing = dummySpacing(template, v3(first.mesh.size))
 
 	local old = setFolderFor(set.family)
 	local oldPivots = if old and not moveToCamera then oldRowPivots(old) else {}
 	local count = #set.items
 	local spots, forward
 	if #oldPivots == 0 then
-		spots, forward = rowInFrontOfCamera(count, spacing, rigSize.Y, old)
+		spots, forward = rowInFrontOfCamera(count, spacing, template:GetExtentsSize().Y, old)
 	end
 
 	local lines = {}
@@ -1155,7 +1197,8 @@ local function buildSet(set, moveToCamera)
 		else
 			-- Extra colours carry on along the row: a rig's local -X is the camera's right.
 			local last = oldPivots[#oldPivots]
-			rig:PivotTo(oldPivots[i] or last * CFrame.new(-(i - #oldPivots) * spacing, 0, 0))
+			local pivot = oldPivots[i] or last * CFrame.new(-(i - #oldPivots) * spacing, 0, 0)
+			rig:PivotTo(CFrame.lookAt(pivot.Position, pivot.Position + nearestAxis(pivot.LookVector)))
 		end
 
 		local handle = parts[i].part
