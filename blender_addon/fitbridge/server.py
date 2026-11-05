@@ -27,6 +27,9 @@ state = {
     "need_rigs": set(),
     "last_request": 0.0,
     "protocol_mismatch": None,
+    "set_revision": 0,          # goes up when a whole set has uploaded and is ready for Studio to build
+    "set_manifest": None,
+    "set_blobs": {},            # path -> JSON bytes (shared mesh, each colour's textures)
 }
 _server = {"httpd": None, "thread": None, "port": None, "error": None}
 
@@ -69,7 +72,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/hello":
             with lock:
                 body = {"protocol": PROTOCOL, **state["hello"], "package_revision": state["package_revision"],
-                        "sent_revision": state["sent_revision"]}
+                        "sent_revision": state["sent_revision"], "set_revision": state["set_revision"]}
             body["needs"] = needs()
             body.update(upload.hello_fields())
             self._send(200, body)
@@ -80,8 +83,16 @@ class Handler(BaseHTTPRequestHandler):
             if manifest is not None:
                 self._send(200, {**manifest, "upload": upload.public()})
                 return
+        if path == "/v1/set":
+            with lock:
+                manifest = state["set_manifest"]
+            if manifest is None:
+                self._error(404, "No set sent yet. Press Send all colours in Blender.")
+            else:
+                self._send(200, manifest)
+            return
         with lock:
-            blob = state["blobs"].get(path)
+            blob = state["blobs"].get(path) or state["set_blobs"].get(path)
             sent = state["manifest"] is not None
         if blob is not None:
             self._send(200, blob)
@@ -95,7 +106,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self._touch()
         path = self.path.split("?", 1)[0].rstrip("/")
-        if path not in ("/v1/rules", "/v1/rig", "/v1/package/result"):
+        if path not in ("/v1/rules", "/v1/rig", "/v1/package/result", "/v1/set/result"):
             self._error(404, f"No such endpoint {path}")
             return
         try:
@@ -161,6 +172,14 @@ def status_text():
     if studio_connected():
         return f"Bridge: Studio connected (port {_server['port']})"
     return f"Bridge: listening on {HOST}:{_server['port']}"
+
+
+def publish_set(blobs, manifest, revision):
+    """every colour has uploaded: tell Studio. Plain data only, so it's safe from the set's thread."""
+    with lock:
+        state["set_blobs"] = blobs
+        state["set_manifest"] = manifest
+        state["set_revision"] = revision
 
 
 def publish(blobs, manifest, revision):

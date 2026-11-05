@@ -203,34 +203,47 @@ def _multipart(request_json, glb, filename):
     return b"".join(parts), f"multipart/form-data; boundary={b}"
 
 
+def _upload(key, creator, name, mesh, textures, pbr, ckey, note=lambda _m: None):
+    """one model, start to finish: returns its asset id or raises OpenCloudError"""
+    glb = write_glb(mesh, textures, pbr, name)
+    who = {"userId" if creator["type"] == "User" else "groupId": str(creator["id"])}
+    body, ctype = _multipart({"assetType": "Model", "displayName": name[:50],
+                              "description": "Made with FitBridge", "creationContext": {"creator": who}},
+                             glb, "fitbridge.glb")
+    data = _request("POST", f"{API}/assets/v1/assets", key, body, {"Content-Type": ctype})
+    op = data.get("operationId") or (data.get("path") or "").rsplit("/", 1)[-1]
+    if not op:
+        raise OpenCloudError("Roblox didn't return an operation id")
+    note(f"Uploading to Roblox… (operation {op[:8]})")
+    end = time.time() + POLL_FOR
+    while time.time() < end:
+        data = _request("GET", f"{API}/assets/v1/operations/{op}", key)
+        if data.get("done"):
+            if data.get("error"):
+                err = data["error"]
+                raise OpenCloudError(f"Roblox rejected the upload: {err.get('message', err) if isinstance(err, dict) else err}")
+            aid = (data.get("response") or {}).get("assetId")
+            if not aid:
+                raise OpenCloudError("Roblox finished without an asset id")
+            aid = int(aid)
+            _cache_put(ckey, aid)
+            return aid
+        time.sleep(POLL_EVERY)
+    raise OpenCloudError("Roblox is still processing after 5 minutes. Send again to retry")
+
+
+def upload_one(key, creator, name, mesh, textures, pbr, ckey):
+    """for a set: (asset id, whether it was already uploaded). Raises OpenCloudError."""
+    cached = _cache().get(ckey)
+    if cached:
+        return int(cached), True
+    return _upload(key, creator, name, mesh, textures, pbr, ckey), False
+
+
 def _run(revision, key, creator, name, mesh, textures, pbr, ckey):
     try:
-        glb = write_glb(mesh, textures, pbr, name)
-        who = {"userId" if creator["type"] == "User" else "groupId": str(creator["id"])}
-        body, ctype = _multipart({"assetType": "Model", "displayName": name[:50],
-                                  "description": "Made with FitBridge", "creationContext": {"creator": who}},
-                                 glb, "fitbridge.glb")
-        data = _request("POST", f"{API}/assets/v1/assets", key, body, {"Content-Type": ctype})
-        op = data.get("operationId") or (data.get("path") or "").rsplit("/", 1)[-1]
-        if not op:
-            raise OpenCloudError("Roblox didn't return an operation id")
-        _set(revision, message=f"Uploading to Roblox… (operation {op[:8]})")
-        end = time.time() + POLL_FOR
-        while time.time() < end:
-            data = _request("GET", f"{API}/assets/v1/operations/{op}", key)
-            if data.get("done"):
-                if data.get("error"):
-                    err = data["error"]
-                    raise OpenCloudError(f"Roblox rejected the upload: {err.get('message', err) if isinstance(err, dict) else err}")
-                aid = (data.get("response") or {}).get("assetId")
-                if not aid:
-                    raise OpenCloudError("Roblox finished without an asset id")
-                aid = int(aid)
-                _cache_put(ckey, aid)
-                _set(revision, state="done", model_asset_id=aid, message=f"Uploaded ✓ model {aid}")
-                return
-            time.sleep(POLL_EVERY)
-        raise OpenCloudError("Roblox is still processing after 5 minutes. Send again to retry")
+        aid = _upload(key, creator, name, mesh, textures, pbr, ckey, lambda m: _set(revision, message=m))
+        _set(revision, state="done", model_asset_id=aid, message=f"Uploaded ✓ model {aid}")
     except OpenCloudError as e:
         _set(revision, state="failed", message=str(e))
     except Exception as e:                                     # never let the key or a traceback leak

@@ -10,7 +10,7 @@ import bpy
 from bpy.props import (BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty,
                        PointerProperty, StringProperty)
 
-from . import auto, draw, evaluate, rig, server, spec, thumb, upload
+from . import auto, batch, draw, evaluate, rig, server, spec, thumb, upload
 
 ICONS = {"pass": "CHECKMARK", "warn": "ERROR", "fail": "CANCEL"}
 _dirty = {"flag": True, "last": 0.0}
@@ -388,6 +388,24 @@ class FB_OT_auto_ignore(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class FB_OT_send_set(bpy.types.Operator):
+    bl_idname = "fitbridge.send_set"
+    bl_label = "Send all colours"
+    bl_description = "Upload this hat and every recolour sharing its mesh, then build them in a row in Studio, using the " \
+                     "original's fit, type and thumbnail. If anything fails, nothing gets built"
+
+    @classmethod
+    def poll(cls, context):
+        return not batch.busy() and len(batch.family(context)) > 1
+
+    def execute(self, context):
+        problem = batch.start(context)
+        if problem:
+            self.report({"ERROR"}, problem)
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
 class FB_OT_restart_server(bpy.types.Operator):
     bl_idname = "fitbridge.restart_server"
     bl_label = "Restart bridge"
@@ -550,6 +568,17 @@ class FB_PT_main(bpy.types.Panel):
         row = box.row(align=True)
         row.scale_y = 1.4
         row.operator("fitbridge.send", icon="EXPORT")
+        n = len(batch.family(context))
+        if n > 1:
+            row = box.row(align=True)
+            row.scale_y = 1.2
+            row.operator("fitbridge.send_set", text=f"Send all colours ({n})", icon="COLOR")
+        got = batch.public()
+        if got["message"]:
+            col = box.column()
+            col.alert = got["state"] == "failed"
+            text = f"{got['done']}/{got['total']}  {got['message']}" if got["state"] == "working" else got["message"]
+            _wrapped(context, col, text, {"failed": "ERROR", "done": "CHECKMARK"}.get(got["state"], "SORTTIME"))
         up = upload.public()
         if server.state["sent_revision"]:
             icon = {"done": "CHECKMARK", "failed": "ERROR", "pending": "SORTTIME", "off": "INFO"}[up["state"]]
@@ -592,6 +621,8 @@ def process_inbox():
                     if sc == scale and src in ("standin", "outdated"):
                         rig.spawn_r15(bpy.context, scale)      # swap the box / older rig for the new one
             elif path == "/v1/package/result":
+                _status["last_result"] = body
+            elif path == "/v1/set/result":
                 _status["last_result"] = body
         except Exception as e:                                # a bad payload mustn't stop the loop
             print(f"FitBridge: couldn't use {path}: {e}")
@@ -672,7 +703,7 @@ def _on_load(*_args):
 
 classes = (FB_Thumb, FB_Settings, FB_Prefs, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_thumb_preset, FB_OT_thumb_preview,
            FB_OT_send,
-           FB_OT_live_window, FB_OT_auto_retry, FB_OT_auto_ignore, FB_OT_restart_server, FB_PT_main)
+           FB_OT_send_set, FB_OT_live_window, FB_OT_auto_retry, FB_OT_auto_ignore, FB_OT_restart_server, FB_PT_main)
 
 
 def register():

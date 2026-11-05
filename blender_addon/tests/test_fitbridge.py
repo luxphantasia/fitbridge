@@ -1084,6 +1084,177 @@ if any(len(arr[k]) != n_corners for k in ("pos", "normal", "uv")):
 draw.draw_live_thumbnail()
 done.append("live thumbnail: same camera, lens and mesh as the real shot")
 
+# --- Send all colours (fake Open Cloud): find the family, name it, upload everything first, then one set for Studio
+from fitbridge import batch  # noqa: E402
+
+_oc2 = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenCloud)     # the first fake was shut down with the upload tests
+threading.Thread(target=_oc2.serve_forever, daemon=True).start()
+keep_api = upload.API
+upload.API = f"http://127.0.0.1:{_oc2.server_address[1]}"
+fake_batch = SimpleNamespace(api_key="set-key", creator_type="User", creator_id="5", claude_api_key="")
+real_batch_prefs = batch.prefs
+batch.prefs = lambda: fake_batch
+keep_set = (st.target, st.item_name, st.acc_type, st.attachment, ctx.view_layer.objects.active,
+            list(ctx.view_layer.objects.selected))
+for o in keep_set[5]:
+    o.select_set(False)
+st.target, st.item_name, st.acc_type = None, "", "Hat"
+hat_me = bpy.data.meshes.new("SetHat")
+hat_me.from_pydata([(-.2, -.2, 5.1), (.2, -.2, 5.1), (.2, .2, 5.1), (-.2, .2, 5.1)], [], [(0, 1, 2, 3)])
+hat_me.uv_layers.new(name="UV")
+
+
+def set_material(name, rgb):
+    img = bpy.data.images.new(name, 32, 32, alpha=True)
+    img.pixels.foreach_set(np.tile(np.array((*rgb, 1), np.float32), 32 * 32))
+    mt = bpy.data.materials.new(name)
+    mt.use_nodes = True
+    node = mt.node_tree.nodes.new("ShaderNodeTexImage")
+    node.image = img
+    mt.node_tree.links.new(node.outputs["Color"], mt.node_tree.nodes["Principled BSDF"].inputs["Base Color"])
+    return mt
+
+
+def set_object(name, x, rgb):
+    o = bpy.data.objects.new(name, hat_me)
+    ctx.scene.collection.objects.link(o)
+    o.material_slots[0].link = "OBJECT" if o.material_slots else "DATA"
+    return o, x, rgb
+
+
+hat_me.materials.append(None)
+members = []
+for nm, x, rgb in (("Big_Hat_LOD", 0, (.5, .5, .5)), ("Big_Hat_LOD - Red", 3, (1, 0, 0)), ("Big_Hat_LOD - Deep Sea Blue", 6, (0, 0, 1)),
+                   ("Big_Hat_LOD - Red.001", 9, (.8, 0, 0))):
+    o, x, rgb = set_object(nm, x, rgb)
+    o.material_slots[0].link = "OBJECT"
+    o.material_slots[0].material = set_material(nm, rgb)
+    o.location.x = x
+    members.append(o)
+orig_hat = members[0]
+ctx.view_layer.update()
+members[2].select_set(True)                                 # selecting any colour finds the whole family
+ctx.view_layer.objects.active = members[2]
+st.target = members[2]
+ctx.view_layer.update()
+if sorted(o.name for o in batch.family(ctx)) != sorted(o.name for o in members):
+    fail(f"family: {[o.name for o in batch.family(ctx)]}")
+found, fres, why = batch.find_original(ctx, batch.family(ctx))
+if found is not orig_hat or why:
+    fail(f"the original is the one on the character: {found} {why}")
+for name_in, want in (("Y2K New York_LOD", "Y2K New York"), ("tripo_mesh.001", "tripo mesh"), ("Hat", "Hat")):
+    if batch.clean_name(name_in) != want:
+        fail(f"clean_name {name_in}: {batch.clean_name(name_in)}")
+long_base = "Tan Fur Tactical Hat with Goggles Headset And More"
+short = batch.item_name("Black Wash", long_base)
+if len(short) > 50 or not short.startswith("Black Wash Tan Fur") or short.endswith(" "):
+    fail(f"shortened name: '{short}'")
+if batch.item_name("Red", "Big Hat") != "Red Big Hat" or batch.unique(["Red", "Blue", "Red"]) != ["Red", "Blue", "Red 2"]:
+    fail("names")
+if batch.colour_word(members[1], orig_hat) != "Red" or batch.colour_word(members[3], orig_hat) != "Red":
+    fail("colour from the object name")
+
+
+def finish_set():
+    end = _time.time() + 60
+    while batch.busy() and _time.time() < end:
+        _time.sleep(0.02)
+    return batch.public()
+
+
+# nothing to go on
+fake_batch.api_key = ""
+if "Open Cloud key" not in (batch.start(ctx) or ""):
+    fail("no key should stop it")
+fake_batch.api_key = "set-key"
+# all or nothing: Roblox refuses, so Studio hears nothing and nothing is built
+set_rev_before = server.state["set_revision"]
+posts_before = len(OC["posts"])
+OC["fail"] = True
+if batch.start(ctx) is not None:
+    fail("start should go")
+got = finish_set()
+OC["fail"] = False
+if got["state"] != "failed" or "nothing built" not in got["message"] or server.state["set_revision"] != set_rev_before:
+    fail(f"a failed upload must build nothing: {got} {server.state['set_revision']}")
+if "set-key" in got["message"]:
+    fail("the key must never reach the message")
+code, e_ = get("/v1/set")
+if server.state["set_manifest"] is None and code != 404:
+    fail(f"/v1/set before a set: {code}")
+# works: uploads each colour, publishes once, Studio's view is complete
+OC["posts"].clear()
+if batch.start(ctx) is not None:
+    fail("start should go")
+got = finish_set()
+if got["state"] != "done" or got["done"] != 4 or server.state["set_revision"] != set_rev_before + 1:
+    fail(f"set: {got}")
+if len(OC["posts"]) != 4:
+    fail(f"four colours = four uploads: {len(OC['posts'])}")
+code, hello = get("/v1/hello")
+code, st_set = get("/v1/set")
+if code != 200 or hello["set_revision"] != st_set["revision"] or st_set["family"] != "Big_Hat_LOD":
+    fail(f"/v1/set: {code} {st_set.get('family')}")
+names = [i["name"] for i in st_set["items"]]
+if names != ["Big Hat", "Deep Sea Blue Big Hat", "Red Big Hat", "Red 2 Big Hat"] or not st_set["items"][0]["is_original"]:
+    fail(f"names and order: {names}")
+first = st_set["items"][0]
+for it in st_set["items"]:
+    if it["upload"]["state"] != "done" or not it["upload"]["model_asset_id"] or set(it["textures"]) != {"color", "normal", "roughness", "metalness"}:
+        fail(f"item: {it['name']} {it['upload']}")
+    for k in ("accessory_type", "attachment", "body_scale", "mesh", "thumbnail"):
+        if it[k] != first[k]:
+            fail(f"every colour shares the original's {k}: {it['name']}")
+shas = {it["textures"]["color"]["sha256"] for it in st_set["items"]}
+if len(shas) != 4:
+    fail("each colour has its own texture")
+code, sm = get("/v1/set/mesh")
+if code != 200 or sm["sha256"] != first["mesh"]["sha256"] or not sm["positions"]:
+    fail("the shared mesh")
+code, stx = get("/v1/set/item/1/texture/color")
+px_ = np.frombuffer(base64.b64decode(stx["rgba_base64"]), np.uint8)
+if code != 200 or stx["sha256"] != st_set["items"][1]["textures"]["color"]["sha256"] or px_[2] < 200 or px_[0] > 50:
+    fail(f"item 1 is the blue one: {code} {px_[:4]}")
+# pressing again: nothing changed, nothing uploads, the set is rebuilt with the same models
+OC["posts"].clear()
+if batch.start(ctx) is not None:
+    fail("start should go")
+got = finish_set()
+_code, st_again = get("/v1/set")
+if got["state"] != "done" or OC["posts"] or [i["upload"]["model_asset_id"] for i in st_again["items"]] != [i["upload"]["model_asset_id"] for i in st_set["items"]]:
+    fail(f"an unchanged set must reuse its uploads: {got} {len(OC['posts'])}")
+# no colour in the name and no Anthropic key: stops and says how to fix it
+members[3].name = "Spare"
+msg = batch.start(ctx)
+if "no colour in its name" not in (msg or "") or batch.busy():
+    fail(f"unnamed colour: {msg}")
+# no one on the character
+keep_x = orig_hat.location.x
+orig_hat.location.x = 20
+ctx.view_layer.update()
+msg = batch.start(ctx)
+if "None of these sit" not in (msg or ""):
+    fail(f"nobody fitted: {msg}")
+orig_hat.location.x = keep_x
+members[1].location.x = 0.01
+ctx.view_layer.update()
+msg = batch.start(ctx)
+if "sit on the character" not in (msg or "") or "Select the original" not in msg:
+    fail(f"two fitted: {msg}")
+members[1].location.x = 3
+ctx.view_layer.update()
+batch.prefs = real_batch_prefs
+upload.API = keep_api
+_oc2.shutdown()
+st.target, st.item_name, st.acc_type, st.attachment = keep_set[0], keep_set[1], keep_set[2], keep_set[3]
+ctx.view_layer.objects.active = keep_set[4]
+for o in members:
+    bpy.data.objects.remove(o)
+for o in keep_set[5]:
+    o.select_set(True)
+done.append("Send all colours: finds the family from any colour, the original is the one on the character, names colour + original, "
+            "all or nothing, one set for Studio with shared fit, re-send reuses uploads, says what's wrong")
+
 # --- the selected mesh is the accessory: one follows, several ask you to choose, none keeps the last
 keep_target, keep_name, keep_active = st.target, st.item_name, ctx.view_layer.objects.active
 keep_sel = list(ctx.view_layer.objects.selected)
