@@ -159,6 +159,14 @@ end
 
 -- Studio-side re-check of a package manifest + mesh against the active rules.
 -- `rules` = { maxTriangles, maxTextureSize, size = Vec, offset = Vec }.
+-- The flat world axis (±X or ±Z) closest to a direction, for facing dummies square to the grid.
+function Geometry.nearestAxis(x: number, z: number): (number, number)
+	if math.abs(x) > math.abs(z) then
+		return if x > 0 then 1 else -1, 0
+	end
+	return 0, if z > 0 then 1 else -1
+end
+
 function Geometry.studioChecks(manifest: any, mesh: any, rules: any): { Check }
 	local checks: { Check } = {}
 	local function add(id, ok, msg, warnOnly)

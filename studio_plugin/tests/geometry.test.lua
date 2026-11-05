@@ -61,6 +61,15 @@ check("limit: colour only keeps our 1024 under a bigger cap", Geometry.textureLi
 check("limit: pbr", Geometry.textureLimit(true, onSend, 1024, 2048) == 2048)
 check("limit: Roblox lowers pbr", Geometry.textureLimit(true, onSend, 1024, 1024) == 1024)
 
+local function axis(x, z)
+	local ax, az = Geometry.nearestAxis(x, z)
+	return ax .. "," .. az
+end
+check("axis: mostly +X", axis(0.9, 0.2) == "1,0")
+check("axis: mostly -X", axis(-0.9, -0.2) == "-1,0")
+check("axis: mostly +Z", axis(0.2, 0.9) == "0,1")
+check("axis: mostly -Z", axis(-0.2, -0.9) == "0,-1")
+
 -- An asymmetric shape: a point sticking out the front (-Z) and one to the right (+X).
 local shape = { 0, 0, -1, 1, 0, 0, 0, 0.5, 0, -0.2, -0.3, 0.4 }
 local rot = Geometry.bestYRotation(shape, shape)

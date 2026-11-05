@@ -60,6 +60,8 @@ The thumbnail camera is sent relative to the worn Handle: `camera_cframe = (A ·
 ```
 Studio polls this about once a second while its panel is open.
 - When `sent_revision` goes up (the user pressed **Send to Studio**), Studio fetches the package and builds it automatically.
+- Each item gets its own test avatar in `Workspace.FitBridge`, standing on free ground in front of the camera. An item is its `name`: the same name goes back on its existing avatar, and a new name gets a new one.
+- Every avatar Studio spawns stands upright, facing along whichever world axis (±X or ±Z) is closest to facing the camera. Colour rows run along the axis at right angles to that.
 - `needs` lists what Blender wants from Studio. Studio answers with `POST /v1/rules` and `POST /v1/rig` for each `rig:<Scale>` (including `rig:R6`). Blender asks for `rules` once per Studio session, and for a rig whenever the user spawns a scale it doesn't have cached yet.
 
 ### `GET /v1/package`
