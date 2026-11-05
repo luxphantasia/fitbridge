@@ -214,6 +214,8 @@ Studio plugins can't upload assets yet (`CreateAssetAsync` reports "not availabl
 - Every colour has the same `accessory_type`, `attachment`, `body_scale`, `mesh` and `thumbnail`. Only `name`, `colour`, `textures`, `pbr` and `upload` differ.
 - `GET /v1/set/mesh` is the shared mesh, in the `/v1/package/mesh` shape. `GET /v1/set/item/{index}/texture/{map}` is one colour's texture, in the `/v1/package/texture/{map}` shape.
 - **Building:** a folder in Workspace named after `name`, holding one dummy per item in a row in `items` order, each wearing that item. Sending the same `family` again replaces that folder in the same place. A different `family` gets its own folder.
+- **Every colour or none:** Studio loads every model before changing the place. If one won't load, nothing is built, any earlier folder for that `family` stays, and the result has `ok: false`. A place that refuses a model needs a new place (File > New), where **Build colours** in the panel builds the latest set. That button is also how to move a set's row to where the camera is looking.
+- Studio builds from the uploaded models, which carry their textures, so it doesn't need `GET /v1/set/item/{index}/texture/{map}`. It reads `GET /v1/set/mesh` for the checks and for the importer turn, which it detects per colour.
 - **Result:** `POST /v1/set/result` with `{ "protocol": 1, "revision": 3, "ok": true, "message": "Built 7 colours. Right-click each → Save to Roblox." }`. Blender shows the message like a `/v1/package/result` one.
 
 ## Errors

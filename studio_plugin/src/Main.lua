@@ -22,6 +22,8 @@ local RIG_VERSION = 3 -- bump when what /v1/rig sends changes, so Blender re-ask
 local BASE_URL = plugin:GetSetting("FitBridgeURL") or "http://127.0.0.1:47231"
 local FOLDER_NAME = "FitBridge"
 local ATTR = "FitBridge"
+local FAMILY_ATTR = ATTR .. "Family" -- on a colour set's folder in Workspace
+local SET_INDEX_ATTR = ATTR .. "SetIndex" -- on each dummy in that folder, for its place in the row
 
 ---------------------------------------------------------------- settings + cache
 
@@ -515,6 +517,7 @@ end
 
 local CAMERA_AIM_SIN = math.sin(math.rad(20))
 local CAMERA_REACH = 100
+local ROW_GAP = 2
 
 local function folder()
 	local f = workspace:FindFirstChild(FOLDER_NAME)
@@ -526,8 +529,27 @@ local function folder()
 	return f
 end
 
--- Where to stand a rig of this height so it's on the ground and on screen. Excludes our own folder from every ray.
-local function groundInFrontOfCamera(height: number): (Vector3, Vector3)
+-- The single-build folder and every colour set's folder.
+local function ownFolders()
+	local list = {}
+	for _, c in workspace:GetChildren() do
+		if c:IsA("Folder") and (c.Name == FOLDER_NAME or c:GetAttribute(FAMILY_ATTR)) then
+			table.insert(list, c)
+		end
+	end
+	return list
+end
+
+local function groundRayParams()
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = ownFolders()
+	params.RespectCanCollide = true
+	return params
+end
+
+-- Where to stand something this big so it's on the ground and on screen. Excludes our own folders from every ray.
+local function groundInFrontOfCamera(height: number, width: number?): (Vector3, Vector3)
 	local cam = workspace.CurrentCamera
 	local origin, look = cam.CFrame.Position, cam.CFrame.LookVector
 	local flat = Vector3.new(look.X, 0, look.Z)
@@ -535,17 +557,17 @@ local function groundInFrontOfCamera(height: number): (Vector3, Vector3)
 		flat = Vector3.new(cam.CFrame.UpVector.X, 0, cam.CFrame.UpVector.Z) -- looking straight down
 	end
 	local forward = flat.Unit
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = { folder() }
-	params.RespectCanCollide = true
+	local params = groundRayParams()
 
 	-- Aim at the middle of the view, or a little below the horizon when looking level or up.
 	local aim = look
 	if aim.Y > -CAMERA_AIM_SIN then
 		aim = forward * math.sqrt(1 - CAMERA_AIM_SIN ^ 2) - Vector3.yAxis * CAMERA_AIM_SIN
 	end
-	local near = (height / 2) / math.tan(math.rad(cam.FieldOfView / 2)) * 1.5 -- far enough to see the whole rig
+	local viewport = cam.ViewportSize
+	local aspect = if viewport.X > 0 and viewport.Y > 0 then viewport.X / viewport.Y else 16 / 9
+	local halfView = math.max(height, (width or 0) / aspect) / 2
+	local near = halfView / math.tan(math.rad(cam.FieldOfView / 2)) * 1.5 -- far enough to see all of it
 	local hit = workspace:Raycast(origin, aim * CAMERA_REACH, params)
 	if not hit then
 		return origin + forward * near - Vector3.yAxis * (height / 2), forward -- no ground in reach: stand at eye level
@@ -557,13 +579,18 @@ local function groundInFrontOfCamera(height: number): (Vector3, Vector3)
 	return Vector3.new(spot.X, if floor then floor.Position.Y else hit.Position.Y, spot.Z), forward
 end
 
+-- Stands the rig at `feet`, looking back along `forward`.
+local function standAt(rig: Model, feet: Vector3, forward: Vector3)
+	rig:PivotTo(CFrame.lookAt(feet, feet - forward))
+	local box, size = rig:GetBoundingBox()
+	rig:PivotTo(rig:GetPivot() + Vector3.yAxis * (feet.Y - (box.Position.Y - size.Y / 2)))
+end
+
 -- Stands the rig facing the camera. Accessories already on it go with it.
 local function standInFrontOfCamera(rig: Model)
 	local before = rig:GetPivot()
 	local feet, forward = groundInFrontOfCamera(rig:GetExtentsSize().Y)
-	rig:PivotTo(CFrame.lookAt(feet, feet - forward))
-	local box, size = rig:GetBoundingBox()
-	rig:PivotTo(rig:GetPivot() + Vector3.yAxis * (feet.Y - (box.Position.Y - size.Y / 2)))
+	standAt(rig, feet, forward)
 	local moved = rig:GetPivot() * before:Inverse()
 	for _, acc in folder():GetChildren() do
 		local handle = acc:IsA("Accessory") and acc:FindFirstChild("Handle") :: BasePart?
@@ -577,9 +604,11 @@ local WEAR_SCRIPT_NAME = "FitBridgeWear"
 local WEAR_SCRIPT = [[
 -- Added by FitBridge. In Play, touch this dummy to wear what it's wearing.
 local rig = script.Parent
+local from = rig.Parent:GetFullName()
 
 -- Handles have to stay unanchored for Roblox, so in Play they'd fall. Hold ours in place.
 local worn = {}
+local wornNames = {}
 for _, accessory in rig.Parent:GetChildren() do
 	local handle = accessory:IsA("Accessory") and accessory:FindFirstChild("Handle")
 	local attachment = handle and handle:FindFirstChildOfClass("Attachment")
@@ -587,6 +616,7 @@ for _, accessory in rig.Parent:GetChildren() do
 	if seat and (seat.WorldPosition - attachment.WorldPosition).Magnitude < 0.1 then
 		handle.Anchored = true
 		table.insert(worn, accessory)
+		wornNames[accessory.Name] = true
 	end
 end
 
@@ -596,10 +626,17 @@ local function onTouched(hit)
 	if not humanoid then
 		return
 	end
+	-- In a row of colours, trying another one swaps it instead of stacking them on one head.
+	for _, other in character:GetChildren() do
+		if other:GetAttribute("FitBridgeFrom") == from and not wornNames[other.Name] then
+			other:Destroy()
+		end
+	end
 	for _, accessory in worn do
 		if not character:FindFirstChild(accessory.Name) then
 			local copy = accessory:Clone()
 			copy.Handle.Anchored = false
+			copy:SetAttribute("FitBridgeFrom", from)
 			humanoid:AddAccessory(copy)
 		end
 	end
@@ -777,10 +814,71 @@ local function detectTurn(part: MeshPart, mesh, size: Vector3)
 	return deg, nil
 end
 
+local function isRefused(loadErr)
+	return string.find(tostring(loadErr), "not authorized", 1, true) ~= nil
+end
+
 local UPLOAD_NOTES = {
 	off = "Preview only: add your Open Cloud API key in Blender's FitBridge preferences to make it uploadable.",
 	pending = "Preview only: Blender is still uploading to Roblox. Studio rebuilds when it's done.",
 }
+
+-- The Marketplace-ready Accessory around a loaded Handle. `turn` undoes any turn from Roblox's importer.
+local function assembleAccessory(manifest, handle: MeshPart, turn: CFrame)
+	handle.Name = "Handle"
+	handle.Size = v3(manifest.mesh.size)
+	handle.Material = Enum.Material.Plastic
+	handle.Transparency = 0
+	handle.Color = Color3.fromRGB(table.unpack(SPEC.marketplace_properties.Color)) -- the texture shows over it
+	handle.CanCollide = false
+	handle.CanTouch = false
+	handle.CanQuery = false
+	handle.Massless = SPEC.marketplace_properties.Massless
+	handle.Anchored = false
+
+	local attachment = Instance.new("Attachment")
+	attachment.Name = manifest.attachment
+	attachment.CFrame = turn * CFrame.new(-v3(manifest.mesh.offset))
+	attachment.Parent = handle
+
+	local accessory = Instance.new("Accessory")
+	accessory.Name = manifest.name
+	local typeSpec = SPEC.accessory_types[manifest.accessory_type]
+	pcall(function()
+		accessory.AccessoryType = Enum.AccessoryType[typeSpec.accessory_type]
+	end)
+	handle.Parent = accessory
+
+	local cfg = Instance.new("Configuration")
+	cfg.Name = "ThumbnailConfiguration"
+	local target = Instance.new("ObjectValue")
+	target.Name = "ThumbnailCameraTarget"
+	target.Value = handle
+	target.Parent = cfg
+	local camValue = Instance.new("CFrameValue")
+	camValue.Name = "ThumbnailCameraValue"
+	camValue.Value = turn * cframeFrom(manifest.thumbnail.camera_cframe)
+	camValue.Parent = cfg
+	cfg.Parent = accessory
+	return accessory, attachment
+end
+
+-- Puts the Handle on the rig's matching attachment. Returns a message if the rig has none.
+local function seatOn(rig: Model, handle: MeshPart, attachment: Attachment): string?
+	local bodyAttachment = nil
+	for _, d in rig:GetDescendants() do
+		if d:IsA("Attachment") and d.Name == attachment.Name then
+			bodyAttachment = d
+			break
+		end
+	end
+	if bodyAttachment then
+		handle.CFrame = bodyAttachment.WorldCFrame * attachment.CFrame:Inverse()
+		return nil
+	end
+	handle.CFrame = rig:GetPivot() * CFrame.new(0, 6, 0)
+	return "Test avatar has no " .. attachment.Name .. "; placed above it."
+end
 
 local function build(manifest, moveToCamera)
 	local mesh, err = request("GET", "/v1/package/mesh")
@@ -821,7 +919,7 @@ local function build(manifest, moveToCamera)
 				if deg == 180 then " (Roblox's importer turned it 180°; compensated)" else ""
 			)
 		else
-			uploadNote = if string.find(tostring(loadErr), "not authorized", 1, true)
+			uploadNote = if isRefused(loadErr)
 				then ("This place isn't allowed to load model %s, so this is only a preview. To submit it, build it in a new place (File > New)."):format(
 					tostring(upload.model_asset_id)
 				)
@@ -875,41 +973,7 @@ local function build(manifest, moveToCamera)
 
 	local recording = ChangeHistoryService:TryBeginRecording("FitBridge build " .. manifest.name)
 
-	handle.Name = "Handle"
-	handle.Size = v3(manifest.mesh.size)
-	handle.Material = Enum.Material.Plastic
-	handle.Transparency = 0
-	handle.Color = Color3.fromRGB(table.unpack(SPEC.marketplace_properties.Color)) -- the texture shows over it
-	handle.CanCollide = false
-	handle.CanTouch = false
-	handle.CanQuery = false
-	handle.Massless = SPEC.marketplace_properties.Massless
-	handle.Anchored = false
-
-	local attachment = Instance.new("Attachment")
-	attachment.Name = manifest.attachment
-	attachment.CFrame = turn * CFrame.new(-v3(manifest.mesh.offset))
-	attachment.Parent = handle
-
-	local accessory = Instance.new("Accessory")
-	accessory.Name = manifest.name
-	local typeSpec = SPEC.accessory_types[manifest.accessory_type]
-	pcall(function()
-		accessory.AccessoryType = Enum.AccessoryType[typeSpec.accessory_type]
-	end)
-	handle.Parent = accessory
-
-	local cfg = Instance.new("Configuration")
-	cfg.Name = "ThumbnailConfiguration"
-	local target = Instance.new("ObjectValue")
-	target.Name = "ThumbnailCameraTarget"
-	target.Value = handle
-	target.Parent = cfg
-	local camValue = Instance.new("CFrameValue")
-	camValue.Name = "ThumbnailCameraValue"
-	camValue.Value = turn * cframeFrom(manifest.thumbnail.camera_cframe)
-	camValue.Parent = cfg
-	cfg.Parent = accessory
+	local accessory, attachment = assembleAccessory(manifest, handle, turn)
 
 	-- Replace any earlier build of this item, then seat it on the matching test avatar's attachment.
 	-- Not Humanoid:AddAccessory: wearing adds an AccessoryRigidConstraint that validation doesn't strip.
@@ -924,18 +988,9 @@ local function build(manifest, moveToCamera)
 			old:Destroy()
 		end
 	end
-	local bodyAttachment = nil
-	for _, d in rig:GetDescendants() do
-		if d:IsA("Attachment") and d.Name == manifest.attachment and d.Parent ~= handle then
-			bodyAttachment = d
-			break
-		end
-	end
-	if bodyAttachment then
-		handle.CFrame = bodyAttachment.WorldCFrame * attachment.CFrame:Inverse()
-	else
-		table.insert(problems, "Test avatar has no " .. manifest.attachment .. "; placed above it.")
-		handle.CFrame = rig:GetPivot() * CFrame.new(0, 6, 0)
+	local seatErr = seatOn(rig, handle, attachment)
+	if seatErr then
+		table.insert(problems, seatErr)
 	end
 	accessory.Parent = folder()
 
@@ -956,6 +1011,198 @@ local function build(manifest, moveToCamera)
 	},
 		problems,
 		checks
+end
+
+---------------------------------------------------------------- colour sets
+
+local function setFolderFor(family)
+	for _, f in ownFolders() do
+		if f:GetAttribute(FAMILY_ATTR) == family then
+			return f
+		end
+	end
+	return nil
+end
+
+-- Feet for a row facing the camera, first on the left, behind any dummies already standing there.
+local function rowInFrontOfCamera(count: number, spacing: number, height: number, replacing: Folder?)
+	local centre, forward = groundInFrontOfCamera(height, count * spacing)
+	local right = forward:Cross(Vector3.yAxis)
+	local taken = {}
+	for _, f in ownFolders() do
+		if f ~= replacing then
+			for _, m in f:GetChildren() do
+				if m:IsA("Model") then
+					table.insert(taken, m:GetPivot().Position * Vector3.new(1, 0, 1))
+				end
+			end
+		end
+	end
+	local function isClear(spot: Vector3)
+		for _, p in taken do
+			if (spot * Vector3.new(1, 0, 1) - p).Magnitude < spacing then
+				return false
+			end
+		end
+		return true
+	end
+	local row = 0
+	local spots = {}
+	repeat
+		local clear = true
+		for i = 1, count do
+			spots[i] = centre + right * ((i - (count + 1) / 2) * spacing) + forward * (row * spacing)
+			clear = clear and isClear(spots[i])
+		end
+		row += 1
+	until clear or row == 10
+	local params = groundRayParams()
+	local top = workspace.CurrentCamera.CFrame.Position.Y
+	for i, spot in spots do
+		local floor = workspace:Raycast(Vector3.new(spot.X, top, spot.Z), -Vector3.yAxis * (CAMERA_REACH * 2), params)
+		spots[i] = Vector3.new(spot.X, if floor then floor.Position.Y else centre.Y, spot.Z)
+	end
+	return spots, forward
+end
+
+-- Where the old set's dummies stood, in row order, so a resend lands in the same place.
+local function oldRowPivots(old: Folder)
+	local rigs = {}
+	for _, m in old:GetChildren() do
+		if m:IsA("Model") and m:GetAttribute(SET_INDEX_ATTR) then
+			table.insert(rigs, m)
+		end
+	end
+	table.sort(rigs, function(a, b)
+		return a:GetAttribute(SET_INDEX_ATTR) < b:GetAttribute(SET_INDEX_ATTR)
+	end)
+	local pivots = {}
+	for i, rig in rigs do
+		pivots[i] = rig:GetPivot()
+	end
+	return pivots
+end
+
+-- Every colour or none: all the models load before the place changes, so a refused one leaves it as it was.
+-- Returns what was built, or nil + a message.
+local function buildSet(set, moveToCamera)
+	local first = set.items[1]
+	if not first then
+		return nil, "The set has no colours."
+	end
+	if not activeRules(first).size then
+		return nil, "No bounds known for " .. first.accessory_type .. " / " .. first.attachment
+	end
+	local mesh, meshErr = request("GET", "/v1/set/mesh")
+	if not mesh then
+		return nil, meshErr
+	end
+
+	local parts = {}
+	local notes = {}
+	for i, item in set.items do
+		local id = item.upload.model_asset_id
+		local part, loadErr = loadUploadedPart(id)
+		if not part then
+			return nil,
+				if isRefused(loadErr)
+					then ("This place isn't allowed to load model %s, so nothing was built. In a new place (File > New), press Build colours."):format(
+						tostring(id)
+					)
+					else "Couldn't load uploaded model " .. tostring(id) .. ", so nothing was built: " .. tostring(loadErr)
+		end
+		-- Per colour, not once: each is its own upload, and a cached one can predate an addon update.
+		local deg, turnErr = detectTurn(part, mesh, v3(item.mesh.size))
+		if turnErr then
+			table.insert(notes, item.name .. ": " .. turnErr)
+		end
+		parts[i] = { part = part, turn = if deg == 180 then CFrame.Angles(0, math.pi, 0) else CFrame.new() }
+	end
+
+	local newFolder = Instance.new("Folder")
+	newFolder.Name = set.name
+	newFolder:SetAttribute(FAMILY_ATTR, set.family)
+
+	-- One rig, cloned along the row, so the clones carry its wear script.
+	local template = makeRig(first.body_scale)
+	template.Parent = newFolder
+	local wearErr = addWearScript(template)
+	if wearErr then
+		table.insert(notes, wearErr)
+	end
+	local rigSize = template:GetExtentsSize()
+	local meshSize = v3(first.mesh.size)
+	local spacing = math.max(rigSize.X, rigSize.Z, meshSize.X, meshSize.Z) + ROW_GAP
+
+	local old = setFolderFor(set.family)
+	local oldPivots = if old and not moveToCamera then oldRowPivots(old) else {}
+	local count = #set.items
+	local spots, forward
+	if #oldPivots == 0 then
+		spots, forward = rowInFrontOfCamera(count, spacing, rigSize.Y, old)
+	end
+
+	local lines = {}
+	local failures = {}
+	local firstAccessory = nil
+	for i, item in set.items do
+		local rig = if i == 1 then template else template:Clone()
+		rig.Name = (item.colour or "Original") .. " dummy"
+		rig:SetAttribute(SET_INDEX_ATTR, i)
+		rig.Parent = newFolder
+		if spots then
+			standAt(rig, spots[i], forward)
+		else
+			-- Extra colours carry on along the row: a rig's local -X is the camera's right.
+			local last = oldPivots[#oldPivots]
+			rig:PivotTo(oldPivots[i] or last * CFrame.new(-(i - #oldPivots) * spacing, 0, 0))
+		end
+
+		local handle = parts[i].part
+		local accessory, attachment = assembleAccessory(item, handle, parts[i].turn)
+		local seatErr = seatOn(rig, handle, attachment)
+		accessory.Parent = newFolder
+		firstAccessory = firstAccessory or accessory
+
+		local issues = {}
+		if seatErr then
+			table.insert(issues, seatErr)
+		end
+		if handle.TextureID == "" and not handle:FindFirstChildOfClass("SurfaceAppearance") and item.textures.color then
+			table.insert(issues, "the uploaded model came without its texture")
+		end
+		local checks = Geometry.studioChecks(item, mesh, activeRules(item))
+		for _, c in instanceTreeChecks(accessory) do
+			table.insert(checks, c)
+		end
+		for _, c in checks do
+			if c.status == "fail" then
+				table.insert(issues, c.message)
+			end
+		end
+		local issue = table.concat(issues, "; ")
+		if #issues > 0 then
+			table.insert(failures, item.name .. ": " .. issue)
+		end
+		table.insert(lines, {
+			status = if #issues > 0 then "fail" else "pass",
+			message = if #issues > 0 then item.name .. ": " .. issue else item.name,
+		})
+	end
+
+	-- Everything so far is off to the side, so this one step is all that undo has to reverse.
+	local recording = ChangeHistoryService:TryBeginRecording("FitBridge build " .. set.name)
+	if old then
+		old:Destroy()
+	end
+	newFolder.Parent = workspace
+	if recording then
+		ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
+	end
+
+	lastBuilt = firstAccessory
+	Selection:Set({ firstAccessory })
+	return { count = count, lines = lines, notes = notes, failures = failures }, nil
 end
 
 ---------------------------------------------------------------- UI
@@ -1131,9 +1378,54 @@ local function buildCurrent(moveToCamera)
 	})
 end
 
+local setBuilding = false
+
+local function buildLatestSet(moveToCamera)
+	if setBuilding then
+		return
+	end
+	setBuilding = true
+	local set, err = request("GET", "/v1/set")
+	if not set then
+		statusLabel.Text = err
+		setBuilding = false
+		return
+	end
+	statusLabel.Text = ("Building %d colours of %s…"):format(#set.items, set.name)
+	local ran, built, buildErr = pcall(buildSet, set, moveToCamera)
+	local message
+	local ok = false
+	if not ran then
+		message = "Couldn't build the colours: " .. tostring(built)
+	elseif not built then
+		message = buildErr
+	elseif #built.failures > 0 then
+		message = ("Built %d colours, but %s%s Fix in Blender and send again."):format(
+			built.count,
+			built.failures[1],
+			if #built.failures > 1 then (", and %d more."):format(#built.failures - 1) else "."
+		)
+	else
+		message = ("Built %d colours. Right-click each → Save to Roblox."):format(built.count)
+		ok = true
+	end
+	if ran and built then
+		showChecks(built.lines, built.notes)
+	else
+		showChecks()
+	end
+	statusLabel.Text = message
+	setBuilding = false
+	request("POST", "/v1/set/result", { protocol = PROTOCOL, revision = set.revision, ok = ok, message = message })
+end
+
 -- Only Build now moves the rig. An auto-build on Send leaves it where you're looking at it.
 button("Build now", function()
 	buildCurrent(true)
+end)
+
+button("Build colours", function()
+	buildLatestSet(true)
 end)
 
 button("Preview thumbnail camera", function()
@@ -1196,6 +1488,7 @@ end)
 
 local lastSent = nil
 local lastUploadBuilt = nil
+local lastSet = nil
 local sentRules = false
 local sentRigs = {}
 
@@ -1238,6 +1531,19 @@ task.spawn(function()
 				elseif uploadDone and lastUploadBuilt ~= hello.sent_revision and autoBuild then
 					lastUploadBuilt = hello.sent_revision
 					pcall(buildCurrent)
+				end
+				-- A set takes a while, so it builds beside this loop and Blender keeps seeing us connected.
+				if lastSet == nil then
+					lastSet = hello.set_revision -- don't rebuild an old set on first connect
+				elseif hello.set_revision and hello.set_revision ~= lastSet and not setBuilding then
+					lastSet = hello.set_revision
+					if lastSet > 0 then -- 0 means Blender restarted and has no set yet
+						if autoBuild then
+							task.spawn(buildLatestSet)
+						else
+							statusLabel.Text = "New colours sent from Blender. Press Build colours."
+						end
+					end
 				end
 			else
 				connLabel.Text = "Blender: " .. tostring(err)
