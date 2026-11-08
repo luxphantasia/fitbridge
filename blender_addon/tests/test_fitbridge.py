@@ -1084,6 +1084,42 @@ if any(len(arr[k]) != n_corners for k in ("pos", "normal", "uv")):
 draw.draw_live_thumbnail()
 done.append("live thumbnail: same camera, lens and mesh as the real shot")
 
+# --- centre dot: the exact middle of the shot, drawn on screen only
+from mathutils import Vector  # noqa: E402
+cam_ = ctx.scene.camera
+c_ = draw.frame_centre(cam_, ctx.scene)
+local_ = cam_.matrix_world.inverted() @ c_
+if abs(local_.x) > 1e-6 or abs(local_.y) > 1e-6 or local_.z >= 0:
+    fail(f"the centre dot should sit on the camera's own axis, in front of it: {tuple(local_)}")
+keep_shift = cam_.data.shift_x
+cam_.data.shift_x = 0.1
+if abs((cam_.matrix_world.inverted() @ draw.frame_centre(cam_, ctx.scene)).x) < 1e-4:
+    fail("the centre dot follows a lens shift (the middle of the frame, not the lens axis)")
+cam_.data.shift_x = keep_shift
+real_on = draw.centre_dot_on
+if real_on(ctx):
+    fail("the centre dot starts off")
+
+
+def preview_pixels():
+    try:
+        im = thumb.preview(ctx)
+    except RuntimeError:
+        return None
+    return None if im is None else hashlib.sha1(np.array(im.pixels[:], np.float32).tobytes()).hexdigest()
+
+
+before_dot = preview_pixels()
+draw.centre_dot_on = lambda c: True
+draw.draw_centre_dot()                                         # no viewport in the background: must just do nothing
+draw.draw_live_thumbnail()
+after_dot = preview_pixels()
+draw.centre_dot_on = real_on
+if before_dot != after_dot:
+    fail("the centre dot must never end up in the Preview render")
+done.append("centre dot: on the camera's axis, follows a lens shift, off by default, " +
+            ("Preview identical with it on" if before_dot else "Preview not renderable in background (render untouched by design)"))
+
 # --- Send all colours (fake Open Cloud): find the family, name it, upload everything first, then one set for Studio
 from fitbridge import batch  # noqa: E402
 

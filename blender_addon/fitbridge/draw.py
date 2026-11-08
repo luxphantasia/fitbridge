@@ -198,6 +198,51 @@ def draw_crop_guide():
     gpu.state.blend_set("NONE")
 
 
+# --------------------------------------------------------------------------------------------------- centre dot
+
+def centre_dot_on(context):
+    """the Centre dot toggle (an add-on preference, so it's remembered between files and sessions)"""
+    a = context.preferences.addons.get(__package__)
+    return a is not None and bool(getattr(a.preferences, "centre_dot", False))
+
+
+def frame_centre(cam, scene):
+    """the middle of the camera's picture, in Blender world: the centre of its frame, so a lens shift counts too"""
+    from mathutils import Vector
+    corners = cam.data.view_frame(scene=scene)
+    return cam.matrix_world @ (sum(corners, Vector()) / 4)
+
+
+def _circle(x, y, r, color, n=24):
+    import math
+    sh = gpu.shader.from_builtin("UNIFORM_COLOR")
+    sh.uniform_float("color", color)
+    pts = [(x, y)] + [(x + r * math.cos(2 * math.pi * k / n), y + r * math.sin(2 * math.pi * k / n)) for k in range(n + 1)]
+    batch_for_shader(sh, "TRI_FAN", {"pos": pts}).draw(sh)
+
+
+def _dot(x, y, scale):
+    """a small white dot with a dark ring, readable over light and dark alike. Screen only: never in a render"""
+    gpu.state.blend_set("ALPHA")
+    _circle(x, y, 4.5 * scale, (0.0, 0.0, 0.0, 0.65))
+    _circle(x, y, 3.0 * scale, (1.0, 1.0, 1.0, 1.0))
+    gpu.state.blend_set("NONE")
+
+
+def draw_centre_dot():
+    """in the thumbnail camera: a dot at the exact centre of the shot"""
+    context = bpy.context
+    if not _in_thumb_camera(context) or not centre_dot_on(context):
+        return
+    cam = context.scene.camera
+    if cam is None or cam.type != "CAMERA":
+        return
+    from bpy_extras.view3d_utils import location_3d_to_region_2d
+    p = location_3d_to_region_2d(context.region, context.region_data, frame_centre(cam, context.scene))
+    if p is not None:
+        _dot(p.x, p.y, context.preferences.system.ui_scale)
+
+
 # ------------------------------------------------------------------------------------------------ live thumbnail
 
 LIVE_SIZE = 256            # pixels, before the UI scale
@@ -344,6 +389,8 @@ def draw_live_thumbnail():
                 size = min(w, h)
                 _render_live(context, max(min(size, MAX_WINDOW_SIZE), 64))
                 _show_live((w - size) // 2, (h - size) // 2, size)
+                if centre_dot_on(context):
+                    _dot((w - size) // 2 + size / 2, (h - size) // 2 + size / 2, scale)
             else:
                 blf.size(0, 13 * scale)
                 blf.color(0, 1, 1, 1, 0.7)
@@ -357,6 +404,8 @@ def draw_live_thumbnail():
         _render_live(context, size)
         x, y = int(20 * scale), int(85 * scale)
         _show_live(x, y, size)
+        if centre_dot_on(context):
+            _dot(x + size / 2, y + size / 2, scale)
         blf.size(0, 11 * scale)
         blf.color(0, 1, 1, 1, 0.85)
         blf.position(0, x, y + size + 5 * scale, 0)
@@ -385,6 +434,7 @@ def register():
     _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_ghost, (), "WINDOW", "POST_VIEW"))
     _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_text, (), "WINDOW", "POST_PIXEL"))
     _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_crop_guide, (), "WINDOW", "POST_PIXEL"))
+    _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_centre_dot, (), "WINDOW", "POST_PIXEL"))
     _handles.append(bpy.types.SpaceView3D.draw_handler_add(draw_live_thumbnail, (), "WINDOW", "POST_PIXEL"))
 
 

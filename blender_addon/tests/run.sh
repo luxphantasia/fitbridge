@@ -15,5 +15,10 @@ if [ $code -eq 0 ]; then                       # the parts that need FitBridge i
     "$BLENDER" -b --factory-startup --python-exit-code 1 --python "$HERE/test_tilt_lock.py"
   code=$?
 fi
+if [ $code -eq 0 ]; then                       # a fresh start of that same throwaway profile (no factory settings)
+  HOME="$T" BLENDER_USER_RESOURCES="$T/blender" FITBRIDGE_CACHE="$T/cache3" FITBRIDGE_PORT="${FITBRIDGE_PORT:-47298}" \
+    "$BLENDER" -b --python-exit-code 1 --python "$HERE/test_centre_dot_kept.py"
+  code=$?
+fi
 rm -rf "$T"
 exit $code

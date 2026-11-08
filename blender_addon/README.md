@@ -16,7 +16,7 @@ frame the thumbnail, then press **Send to Studio**. The contract is `../docs/PRO
 | `server.py` | The `http.server` thread on 127.0.0.1:47231. It only serves snapshots and queues POSTs; no bpy |
 | `rig.py` | Spawns the R15 / R6 preview mannequin (one toggle, same place), shaded smooth like Studio |
 | `thumb.py` | Thumbnail camera: one shot per accessory as an orbit (turn, tilt, distance, pan) around the attachment in the Handle's frame; side-aware defaults; viewport navigation moves it; presets, preview render |
-| `draw.py` | Ghost bounds box (GPU overlay, green or red) and the "Top (Y): 0.14 studs over" readout |
+| `draw.py` | Ghost bounds box (GPU overlay, green or red), the "Top (Y): 0.14 studs over" readout, the live thumbnail, and the Centre dot (an addon preference, screen only, never rendered) |
 | `upload.py` | Open Cloud upload (PROTOCOL v1.1): a tiny `.glb` writer from the wire arrays, then a multipart POST + operation poll on a worker thread, cached by mesh + texture hashes |
 
 The Open Cloud key, creator type and creator id go in the addon preferences. The key is only ever sent to

@@ -68,6 +68,13 @@ def _lock_tilt_changed(context):
         thumb.tilt_lock(context, bool(p and p.lock_tilt))
 
 
+def _redraw_views(context):
+    for win in context.window_manager.windows:
+        for area in win.screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()
+
+
 def _shot_changed(self, context):
     """a slider moved: that's you framing the shot"""
     if thumb._quiet["n"]:
@@ -154,6 +161,9 @@ class FB_Prefs(bpy.types.AddonPreferences):
     live_preview: BoolProperty(name="Live preview", default=True,
                                description="Show the thumbnail as it stands in the corner of the viewport. It updates "
                                            "as you frame the shot. Quick look: Preview is the full render")
+    centre_dot: BoolProperty(name="Centre dot", default=False, update=lambda self, context: _redraw_views(context),
+                             description="A small dot at the exact centre of the thumbnail, in Thumbnail view and on "
+                                         "the live thumbnail. Only drawn on screen: never in Preview or what's sent")
     auto_mode: BoolProperty(name="Auto (experimental)", default=False, update=lambda self, context: mark_dirty(),
                             description="Claude looks at the selected mesh and sets the type, attachment, name and "
                                         "thumbnail for you. Each new mesh sends 17 renders of it to Anthropic in two "
@@ -509,6 +519,7 @@ class FB_PT_main(bpy.types.Panel):
             row = box.row(align=True)
             row.prop(p, "live_preview", toggle=True, icon="HIDE_OFF" if p.live_preview else "HIDE_ON")
             row.operator("fitbridge.live_window", text="Pop out", icon="WINDOW")
+            row.prop(p, "centre_dot", toggle=True, text="Centre", icon="DOT")
         g, gob = thumb.owner(context)
         if st.thumb_view:
             row = box.row(align=True)
