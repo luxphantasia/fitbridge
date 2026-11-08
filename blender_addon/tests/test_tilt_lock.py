@@ -36,9 +36,17 @@ inputs.view_rotate_method = "TURNTABLE"
 fb._restore_orbit()
 if inputs.view_rotate_method != "TRACKBALL" or p.saved_orbit:
     fail("a borrowed orbit style should be restored on start")
+# Centre dot: a preference, off until switched on, and saved with the preferences so it's remembered next time
+draw = sys.modules[MOD + ".draw"]
+if p.centre_dot or draw.centre_dot_on(bpy.context):
+    fail("the centre dot starts off")
+p.centre_dot = True
+if not draw.centre_dot_on(bpy.context):
+    fail("switching Centre dot on should show it")
+bpy.ops.wm.save_userpref()                                     # the throwaway profile run.sh made, never yours
 # disabling FitBridge mid-framing never leaves it borrowed
 st.thumb_view = True
 bpy.ops.preferences.addon_disable(module=MOD)
 if inputs.view_rotate_method != "TRACKBALL":
     fail("disabling FitBridge while framing must give the orbit style back")
-print("PASS tilt lock: Turntable while framing, Trackball back on leave / toggle / crash / disable")
+print("PASS tilt lock: Turntable while framing, Trackball back on leave / toggle / crash / disable; Centre dot pref")
