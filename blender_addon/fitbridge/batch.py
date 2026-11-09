@@ -12,7 +12,7 @@ import urllib.request
 
 import bpy
 
-from . import auto, evaluate, geom, server, spec, thumb, upload
+from . import auto, evaluate, geom, host, server, spec, thumb, upload
 from .version import VERSION
 
 MAX_NAME = 50
@@ -21,8 +21,7 @@ _state = {"state": "idle", "done": 0, "total": 0, "message": "", "revision": 0}
 
 
 def prefs():
-    a = bpy.context.preferences.addons.get(__package__)
-    return a.preferences if a else None
+    return host.prefs()
 
 
 def public():

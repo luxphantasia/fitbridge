@@ -8,7 +8,7 @@ import numpy as np
 from gpu_extras.batch import batch_for_shader
 from mathutils import Matrix
 
-from . import geom
+from . import geom, host
 from .evaluate import LIVE
 
 _handles = []
@@ -73,8 +73,8 @@ def draw_view():
 
 def _hint(context):
     """until the FitBridge tab has been opened once: where to find it"""
-    a = context.preferences.addons.get(__package__)
-    if a is None or a.preferences.welcomed:
+    p = host.prefs(context)
+    if p is None or p.welcomed:
         return False
     ui = context.preferences.system.ui_scale
     blf.size(0, 13 * ui)
@@ -202,8 +202,8 @@ def draw_crop_guide():
 
 def centre_dot_on(context):
     """the Centre dot toggle (an add-on preference, so it's remembered between files and sessions)"""
-    a = context.preferences.addons.get(__package__)
-    return a is not None and bool(getattr(a.preferences, "centre_dot", False))
+    p = host.prefs(context)
+    return p is not None and bool(getattr(p, "centre_dot", False))
 
 
 def frame_centre(cam, scene):

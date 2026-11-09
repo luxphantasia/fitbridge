@@ -30,7 +30,8 @@ def cache_dir():
         if not p:
             import bpy
             try:
-                p = bpy.utils.extension_path_user(__package__, path="", create=True)
+                from . import host
+                p = host.user_dir()
             except (ValueError, TypeError, AttributeError):
                 p = bpy.utils.user_resource("CONFIG", path="fitbridge", create=True)
         _cache_dir = Path(p)

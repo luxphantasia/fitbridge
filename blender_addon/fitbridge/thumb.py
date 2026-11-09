@@ -15,7 +15,7 @@ import bpy
 import numpy as np
 from mathutils import Matrix
 
-from . import geom, spec
+from . import geom, host, spec
 
 FOV = spec.SPEC["thumbnail"]["field_of_view"]
 TAN = math.tan(math.radians(FOV) / 2)
@@ -283,8 +283,7 @@ def out_of_frame(res, g):
 # ------------------------------------------------------------------------------------------------------- the view
 
 def _addon_prefs(context):
-    a = context.preferences.addons.get(__package__)
-    return a.preferences if a else None
+    return host.prefs(context)
 
 
 def tilt_lock(context, on):

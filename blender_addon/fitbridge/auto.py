@@ -18,7 +18,7 @@ import bpy
 import numpy as np
 from mathutils import Vector
 
-from . import evaluate, geom, rig, spec, thumb
+from . import evaluate, geom, host, rig, spec, thumb
 from .version import VERSION
 
 API = os.environ.get("FITBRIDGE_CLAUDE_API", "https://api.anthropic.com")   # tests point this at a local fake
@@ -43,8 +43,7 @@ _run = {"busy": None, "failed": None, "message": "", "seen": None, "since": 0.0,
 
 
 def prefs():
-    a = bpy.context.preferences.addons.get(__package__)
-    return a.preferences if a else None
+    return host.prefs()
 
 
 def enabled():
