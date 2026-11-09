@@ -10,7 +10,7 @@ import bpy
 from bpy.props import (BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty,
                        PointerProperty, StringProperty)
 
-from . import auto, batch, draw, evaluate, rig, server, spec, thumb, upload
+from . import auto, batch, draw, evaluate, host, rig, server, spec, thumb, upload
 
 ICONS = {"pass": "CHECKMARK", "warn": "ERROR", "fail": "CANCEL"}
 _dirty = {"flag": True, "last": 0.0}
@@ -141,8 +141,9 @@ class FB_Settings(bpy.types.PropertyGroup):
     revision: IntProperty(default=0)
 
 
-class FB_Prefs(bpy.types.AddonPreferences):
-    bl_idname = __package__
+class FB_PrefProps(bpy.types.PropertyGroup):
+    """FitBridge's settings. On its own they are the add-on's preferences (FB_Prefs below); inside a suite the suite
+    hosts this group in its own preferences (PREFS)."""
 
     port: IntProperty(name="Port", default=47231, min=1024, max=65535,
                       description="Must match the Studio plugin's setting")
@@ -176,8 +177,7 @@ class FB_Prefs(bpy.types.AddonPreferences):
     claude_api_key: StringProperty(name="Anthropic API key", subtype="PASSWORD",
                                    description="For Auto mode. Stays on this computer: only sent to api.anthropic.com")
 
-    def draw(self, context):
-        lay = self.layout
+    def draw_into(self, lay):
         row = lay.row()
         row.prop(self, "port")
         row.operator("fitbridge.restart_server", text="Restart bridge")
@@ -192,9 +192,22 @@ class FB_Prefs(bpy.types.AddonPreferences):
         box.prop(self, "claude_api_key")
 
 
+def draw_prefs(layout, p):
+    p.draw_into(layout)
+
+
+if host.IN_SUITE:
+    PREFS = FB_PrefProps                    # suitekit registers it and keeps it in the suite's preferences
+    _PREF_CLASSES = ()
+else:
+    FB_Prefs = type("FB_Prefs", (bpy.types.AddonPreferences,), {
+        "bl_idname": __package__, "__annotations__": dict(FB_PrefProps.__annotations__),
+        "draw_into": FB_PrefProps.draw_into, "draw": lambda self, context: self.draw_into(self.layout)})
+    _PREF_CLASSES = (FB_Prefs,)
+
+
 def prefs():
-    a = bpy.context.preferences.addons.get(__package__)
-    return a.preferences if a else None
+    return host.prefs()
 
 
 # ------------------------------------------------------------------------------------------------------- operators
@@ -712,7 +725,7 @@ def _on_load(*_args):
     evaluate.LIVE["result"] = None
 
 
-classes = (FB_Thumb, FB_Settings, FB_Prefs, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_thumb_preset, FB_OT_thumb_preview,
+classes = (FB_Thumb, FB_Settings, *_PREF_CLASSES, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_thumb_preset, FB_OT_thumb_preview,
            FB_OT_send,
            FB_OT_send_set, FB_OT_live_window, FB_OT_auto_retry, FB_OT_auto_ignore, FB_OT_restart_server, FB_PT_main)
 
