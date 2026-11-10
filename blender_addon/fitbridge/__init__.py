@@ -10,11 +10,13 @@ import bpy
 from bpy.props import (BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty,
                        PointerProperty, StringProperty)
 
-from . import auto, batch, draw, evaluate, host, rig, server, spec, thumb, upload
+from . import auto, batch, draw, evaluate, host, listing, panel, rig, server, spec, thumb, upload
+from . import ui as kit
 
 ICONS = {"pass": "CHECKMARK", "warn": "ERROR", "fail": "CANCEL"}
 _dirty = {"flag": True, "last": 0.0}
 _status = {"last_result": None, "last_sent": None, "message": ""}
+panel.SHARED["status"] = _status
 NAME_KEY = "fitbridge_name"
 
 
@@ -136,6 +138,13 @@ class FB_Settings(bpy.types.PropertyGroup):
     thumb_view: BoolProperty(name="Thumbnail view", default=False, update=_thumb_changed,
                              description="Look through Roblox's thumbnail camera (70 deg vertical FOV, square 420). "
                                          "Orbit, pan and zoom as usual to move it")
+    ui_tab: EnumProperty(name="Part", items=[("FIT", "Fit", ""), ("THUMB", "Thumbnail", ""), ("LISTING", "Listing", "")])
+    ui_checks_open: BoolProperty(name="Checks", default=False, description="Show every check, or only what needs a look")
+    ui_collapsed: BoolProperty(name="Fold", default=False, description="Fold FitBridge away, or open it again")
+    listing_note: StringProperty(name="Note", maxlen=500,
+                                 description="Anything Studio should know before it writes the listing")
+    listing_light: EnumProperty(name="Pictures", items=[("FLAT", "Flat colours", "The texture's true colours, no light"),
+                                                        ("STUDIO", "Soft light", "Blender's studio light, which shows the shape")])
     thumb_default: PointerProperty(type=FB_Thumb)            # the shot before an accessory mesh is picked
     thumb_saved: StringProperty()
     revision: IntProperty(default=0)
@@ -176,6 +185,13 @@ class FB_PrefProps(bpy.types.PropertyGroup):
                                              "more renders to Anthropic, billed to your API key")
     claude_api_key: StringProperty(name="Anthropic API key", subtype="PASSWORD",
                                    description="For Auto mode. Stays on this computer: only sent to api.anthropic.com")
+    studio_key: StringProperty(name="Studio Blender key", subtype="PASSWORD",
+                               description="For the Listing tab: a Blender key from your Paradyse Studio (Settings, "
+                                           "Blender key). Only sent to the Studio site below. Inside the UGC Suite, "
+                                           "leave it empty to use Tripo Loop's key")
+    studio_url: StringProperty(name="Studio site", default="https://paradyse.art")
+    plain_panel: BoolProperty(name="Plain panel", default=False, update=lambda self, context: _redraw_views(context),
+                              description="Show FitBridge as ordinary Blender buttons instead of the drawn panel")
 
     def draw_into(self, lay):
         row = lay.row()
@@ -190,6 +206,11 @@ class FB_PrefProps(bpy.types.PropertyGroup):
         box = lay.box()
         box.label(text="Auto mode (experimental)", icon="LIGHT")
         box.prop(self, "claude_api_key")
+        box = lay.box()
+        box.label(text="Listing tab (Paradyse Studio)", icon="TEXT")
+        box.prop(self, "studio_key")
+        box.prop(self, "studio_url")
+        lay.prop(self, "plain_panel")
 
 
 def draw_prefs(layout, p):
@@ -457,14 +478,26 @@ class FB_PT_main(bpy.types.Panel):
     bl_region_type = "UI"
     bl_category = "FitBridge"
     bl_label = "FitBridge"
+    bl_options = {"HIDE_HEADER"}                    # the drawn card has its own header (and folds by itself)
 
     def draw(self, context):
-        st = context.scene.fitbridge
-        lay = self.layout
         p = prefs()
         if p is not None and not p.welcomed:
             p.welcomed = True                       # the panel has been found: the viewport hint goes away
             context.preferences.is_dirty = True
+        if kit.usable() and not (p is not None and p.plain_panel):
+            rows = kit.Rows(self.layout, context)
+            panel.build(rows, context)
+            rows.publish(context)
+        else:
+            self.draw_plain(context)
+
+    def draw_plain(self, context):
+        """the same panel as ordinary Blender buttons (the Plain panel preference, or if the drawing ever fails)"""
+        st = context.scene.fitbridge
+        lay = self.layout.box()
+        lay.label(text="FitBridge", icon="MOD_CLOTH")
+        p = prefs()
         res = evaluate.LIVE["result"]
         if abs(context.scene.unit_settings.scale_length - 1.0) > 1e-6:
             lay.label(text="Scene unit scale isn't 1.0 (1 unit = 1 stud)", icon="ERROR")
@@ -658,6 +691,10 @@ def _tick():
     try:
         changed = process_inbox()
         try:
+            changed = listing.tick() or changed
+        except Exception as e:                                # the Listing tab mustn't stop the loop
+            print(f"FitBridge: listing: {e}")
+        try:
             auto.tick(bpy.context)
         except Exception as e:                                # Auto mode mustn't stop the loop
             print(f"FitBridge: Auto mode: {e}")
@@ -727,7 +764,8 @@ def _on_load(*_args):
 
 classes = (FB_Thumb, FB_Settings, *_PREF_CLASSES, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_thumb_preset, FB_OT_thumb_preview,
            FB_OT_send,
-           FB_OT_send_set, FB_OT_live_window, FB_OT_auto_retry, FB_OT_auto_ignore, FB_OT_restart_server, FB_PT_main)
+           FB_OT_send_set, FB_OT_live_window, FB_OT_auto_retry, FB_OT_auto_ignore, FB_OT_restart_server,
+           *panel.classes, FB_PT_main)
 
 
 def register():
@@ -744,9 +782,13 @@ def register():
     bpy.app.timers.register(_fix_scales, first_interval=0.1)
     bpy.app.timers.register(_restore_orbit, first_interval=0.3)
     draw.register()
+    kit.register()
+    listing.register()
 
 
 def unregister():
+    listing.unregister()
+    kit.unregister()
     draw.unregister()
     if bpy.context.scene and getattr(bpy.context.scene, "fitbridge", None) is not None:
         thumb.tilt_lock(bpy.context, False)                   # never leave the user's orbit style borrowed

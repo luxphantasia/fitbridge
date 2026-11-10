@@ -483,7 +483,7 @@ def frame_shot(V, turn, tilt, fill=0.88):
     return max(distance, 0.2), (float(pan[0]), float(pan[1]))
 
 
-def render_shots(context, ob, centre, shots, size, also=(), background=(0.5, 0.5, 0.5)):
+def render_shots(context, ob, centre, shots, size, also=(), background=(0.5, 0.5, 0.5), light="STUDIO"):
     """PNG bytes of ob (plus the objects in `also`) through the thumbnail's own lens, for each (turn, tilt, distance,
     pan). Your file's cameras, render settings and output path all come back afterwards."""
     sc = context.scene
@@ -504,6 +504,7 @@ def render_shots(context, ob, centre, shots, size, also=(), background=(0.5, 0.5
             r.image_settings.color_mode = "RGB"
             shading.background_type = "VIEWPORT"
             shading.background_color = background
+            shading.light = light                              # _isolated puts your own back
             for i, (turn, tilt, distance, pan) in enumerate(shots):
                 m = geom.to_blender(local_matrix(turn, tilt, distance, pan, (0.0, 0.0, 0.0)))
                 m[:3, 3] += centre

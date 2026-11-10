@@ -250,6 +250,7 @@ def evaluate(context, ob=None, publish=True):
     res["bounds_source"] = bsrc
     if A is not None:
         res["box"] = (A @ geom.translation(boff), bsize)          # Roblox world
+        res["bounds"] = (list(bsize), list(boff))                 # in the attachment's own frame
         res["A"] = A
     if ob is None:
         res["checks"].append(_check("single_mesh", "fail", "Pick a mesh object (or make one active)"))

@@ -20,5 +20,10 @@ if [ $code -eq 0 ]; then                       # a fresh start of that same thro
     "$BLENDER" -b --python-exit-code 1 --python "$HERE/test_centre_dot_kept.py"
   code=$?
 fi
+if [ $code -eq 0 ]; then                       # the Listing tab against a fake Studio, and the drawn panel's layout
+  HOME="$T" BLENDER_USER_RESOURCES="$T/blender" FITBRIDGE_CACHE="$T/cache4" FITBRIDGE_PORT="${FITBRIDGE_PORT:-47298}" \
+    FITBRIDGE_LISTING_POLL=0.1 "$BLENDER" -b --python-exit-code 1 --python "$HERE/test_listing.py"
+  code=$?
+fi
 rm -rf "$T"
 exit $code
