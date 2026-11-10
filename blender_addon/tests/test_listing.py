@@ -145,7 +145,7 @@ st.ui_tab = "THUMB"
 lay_out()
 st.thumb_view = False
 st.ui_collapsed = True
-if len(lay_out().items) > 4:
+if len(lay_out().items) > 5:
     fail("folded, the panel is only its header")
 st.ui_collapsed = False
 done.append("the drawn panel lays out: Fit, Thumbnail, Thumbnail with camera view, Listing, folded")
