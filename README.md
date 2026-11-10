@@ -21,6 +21,7 @@ Send to Studio ── localhost:47231 ──────────────
 
 | Path | What it is |
 |---|---|
+| `docs/LISTING.md` | The Listing tab: what it sends to a Paradyse Studio site and the contract it speaks |
 | `docs/BRIEF.md` | Decisions, research findings, risks, and the Blender addon's requirements |
 | `docs/PROTOCOL.md` | The bridge contract both plugins follow (coordinates, endpoints, JSON) |
 | `docs/UPDATING_SPECS.md` | How spec changes are found and approved |
