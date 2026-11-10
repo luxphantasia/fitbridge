@@ -70,6 +70,7 @@ def build(rows, context):
     st = _st(context)
     p = host.prefs()
     res = evaluate.LIVE["result"]
+    rows.gap(4)
     rows.mark()
 
     # --- header: mark, name, the link to Roblox Studio, fold
@@ -93,7 +94,7 @@ def build(rows, context):
         kit.box(x + w - 24 * ui - tw - 12 * ui, y + h / 2 - 3 * ui, 6 * ui, 6 * ui, 3 * ui, link_col)
     rows.add(36, real=lambda r: setter(r, "scene", "ui_collapsed"), paint=p_head)
     if st.ui_collapsed:
-        rows.gap(8)
+        rows.mark()                                           # a second marker: a panel above may paint over the first
         return
 
     if not running:
