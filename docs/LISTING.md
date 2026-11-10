@@ -40,9 +40,14 @@ listing = { id, status: "running" | "done" | "failed", step, error, url, chip_id
                            price: null | { low, median, high, from } } }
 ```
 
-- `item` is the listing's one item. A character has `real` and `adjacent`; anything else has `plain`.
+- `item` is the listing's one item, and null until `status` is `"done"`. A character has `real` and maybe `adjacent`
+  (none was found: Blender shows `real`, with no switch); anything else has only `plain`. `names` holds 1 to 3.
+- `error` can be set on a done listing (a later fix on the site failed): Blender shows it and keeps the item.
+- `no_colour` is an instruction to the name writer, not a filter: the item's own colour stays out of the names, a colour
+  that is part of what the thing is ("Black Cat Ears") stays. The listing echoes it back as `no_colour`.
+- `category` may be a layered-clothing key FitBridge has no rigid type for; then no Type is offered.
 - Descriptions arrive with the ticked closing lines already added.
 - `url` is the listing's page on the site. Blender only opens it when it starts with the site's own address.
-- An optional `start` (`"real"` or `"adjacent"`) says which copy to show first; without it Blender starts on
-  `adjacent`.
+- Blender starts on `adjacent` when there is one, as the site's page does. An adjacent name lowers an item's
+  visibility; nothing here says an item is safe to sell.
 - Errors are `{ error }` in words, shown as they are. 401 and 403 mean the key was refused.

@@ -732,6 +732,8 @@ def build_listing(rows, context, st):
     rows.add(28, real=n_foot, paint=p_foot)
     if listing.RUN["error"] and listing.RUN["error_ob"] == ob.name:
         rows.status(listing.RUN["error"], "bad")
+    elif got.get("error"):                                    # a later fix on the site that failed: the listing stands
+        rows.status(str(got["error"]), "warn")
     return True
 
 
