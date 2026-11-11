@@ -11,6 +11,12 @@ icon of each gives that row's height on screen, the outer two the left and right
 the marker nearest to it, so nothing is ever assumed about where the panel is, and a small rounding error can't add up
 down the panel. The markers also check each other: if two of them aren't as far apart as the row heights say they
 should be, the painted buttons can't be trusted to sit on the real ones, and the plain panel takes over instead.
+
+Hover works the same way, with no listener of any kind running (a modal operator would hold back Blender's autosave):
+Blender itself lightens the real button the mouse is over, and redraws. Before painting, the painter reads the pixels
+under the panel and each painted control looks at its own patch: lighter than a resting button means the mouse is on
+it, the pressed colour means it's held down. So the painted hover is always the button a click would really hit.
+Changes of state are eased over about a tenth of a second (tween); while one runs, the sidebar is redrawn each frame.
 """
 
 import math
@@ -29,13 +35,16 @@ from gpu_extras.batch import batch_for_shader
 BG = (0.094, 0.094, 0.102, 1.0)         # the card (opaque: the real buttons underneath must not show)
 S1 = (0.125, 0.125, 0.137, 1.0)         # wells: fields, tracks, tiles
 S2 = (0.157, 0.157, 0.172, 1.0)         # buttons
-S3 = (0.212, 0.212, 0.231, 1.0)         # the chosen segment, a pressed button
+S3 = (0.212, 0.212, 0.231, 1.0)         # the chosen segment, a toggle that's on
+S4 = (0.262, 0.262, 0.286, 1.0)         # the mouse over a chosen thing
+S2H = (0.196, 0.196, 0.214, 1.0)        # the mouse over a button
 LINE = (1.0, 1.0, 1.0, 0.08)
 T1 = (0.925, 0.925, 0.941, 1.0)
 T2 = (0.651, 0.651, 0.690, 1.0)
 T3 = (0.431, 0.431, 0.471, 1.0)
 ACC = (0.176, 0.549, 0.941, 1.0)        # FitBridge's one accent: the main action and the chosen thing
-ACC_HI = (0.300, 0.640, 0.980, 1.0)
+ACC_HI = (0.300, 0.640, 0.980, 1.0)     # the mouse over the main action
+ACC_LO = (0.130, 0.440, 0.800, 1.0)     # the main action held down
 GOOD = (0.310, 0.749, 0.478, 1.0)
 WARN = (0.851, 0.643, 0.255, 1.0)
 BAD = (0.878, 0.341, 0.357, 1.0)
@@ -52,6 +61,10 @@ SIDE_L, SIDE_R, TABS_W = 10.0, 10.0, 22.0   # a first guess at the layout's edge
 FONT = {"ui": 0, "mono": None}
 DRAW = {}                               # region pointer -> {"rows", "marks", "token", "seen", "cache", "strikes"}
 FLASH = {}                              # key -> time of the click
+LIVE = {"snap": None, "ox": 0, "oy": 0, "theme": None, "x0": 0.0, "top": 0.0, "ui": 1.0, "region": 0, "want": False,
+        "timer": False}                 # what the painter knows while it paints one panel
+TWEEN = {}                              # (region, key) -> [from, to, start time, value now]
+HOVER_S, MOVE_S = 0.09, 0.14            # seconds: a hover fading in or out; something sliding to a new place
 STATE = {"broken": False, "handle": None, "icons": None, "ids": [], "side": 0}
 _TEX = {}
 
@@ -309,61 +322,171 @@ def g_mark(x, y, s, ui):
     box(x + s / 2 - r, y + s / 2 - r, 2 * r, 2 * r, r * 0.45, ACC)
 
 
+# ------------------------------------------------------------------------------------------------ hover and easing
+
+def mix(a, b, t):
+    t = max(0.0, min(1.0, t))
+    return tuple(a[i] + (b[i] - a[i]) * t for i in range(4))
+
+
+def _theme():
+    """the resting and the pressed colour of Blender's own widgets, as bytes: what an untouched real button looks like"""
+    t = bpy.context.preferences.themes[0].user_interface
+    out = {}
+    for kind, name in (("tool", "wcol_tool"), ("menu", "wcol_menu"), ("slider", "wcol_numslider")):
+        w = getattr(t, name)
+        out[kind] = ([int(round(v * 255)) for v in w.inner[:3]], [int(round(v * 255)) for v in w.inner_sel[:3]])
+    return out
+
+
+def hot(x, y, w, h, kind="tool"):
+    """the real button under this patch: 0 = at rest, 1 = the mouse is over it, 2 = held down.
+    kind = which of Blender's widgets it is: "tool" (a button), "menu" (a pop-up list), "slider"."""
+    a = LIVE["snap"]
+    if a is None or w < 8 or h < 8:
+        return 0
+    base, sel = LIVE["theme"][kind]
+    H, W = a.shape[:2]
+    lit, down = [], 0
+    for fy in (0.22, 0.78):                         # above and below any text in the middle
+        py = int(y + h * fy) - LIVE["oy"]
+        if not 0 <= py < H:
+            continue
+        for fx in (0.2, 0.5, 0.8):
+            px = int(x + w * fx) - LIVE["ox"]
+            if not 0 <= px < W:
+                continue
+            c = a[py, px]
+            r, g, bl = int(c[0]), int(c[1]), int(c[2])
+            if max(abs(r - sel[0]), abs(g - sel[1]), abs(bl - sel[2])) <= 8:
+                down += 1
+                continue
+            d = (r - base[0], g - base[1], bl - base[2])
+            if min(d) >= 5 and max(d) <= 90 and max(d) - min(d) <= 28:      # evenly lighter than at rest
+                lit.append((r, g, bl))
+    if kind == "slider":                            # part of a slider is its fill, so two patches are enough
+        return 1 if len(lit) + down >= 2 else 0
+    if down >= 4:
+        return 2
+    # a lit button is one flat colour all over; anything else lighter (the 3D view showing through a gap) isn't
+    if len(lit) >= 5 and max(max(abs(c[i] - lit[0][i]) for i in range(3)) for c in lit) <= 10:
+        return 1
+    return 0
+
+
+def _key(x, y, w):
+    ui = LIVE.get("ui", 1.0) or 1.0
+    return (round((x - LIVE["x0"]) / ui), round((LIVE["top"] - y) / ui), round(w / ui))
+
+
+def tween(key, target, dur=HOVER_S):
+    """the value on its way to `target`, eased; asks for another frame while it's moving"""
+    now = time.perf_counter()
+    k = (LIVE["region"], key)
+    s = TWEEN.get(k)
+    if s is None:
+        if len(TWEEN) > 600:
+            TWEEN.clear()
+        TWEEN[k] = [target, target, now, target]    # the first time it's seen, it's simply there
+        return target
+    if s[1] != target:
+        s[0], s[1], s[2] = s[3], target, now
+    p = 1.0 if dur <= 0 else min(1.0, (now - s[2]) / dur)
+    s[3] = s[0] + (s[1] - s[0]) * (p * p * (3 - 2 * p))
+    if p < 1.0:
+        LIVE["want"] = True
+    return s[3]
+
+
+def feel(x, y, w, h, kind="tool", enabled=True):
+    """(how far the hover has faded in, 0 to 1; whether it's held down) for the control painted at this patch"""
+    s = hot(x, y, w, h, kind) if enabled else 0
+    return tween(("hover",) + _key(x, y, w), 1.0 if s else 0.0), s == 2
+
+
+def _next_frame():
+    LIVE["timer"] = False
+    try:
+        redraw()
+    except Exception:  # noqa: BLE001 - a file being loaded: there's nothing to redraw
+        pass
+    return None
+
+
 # ------------------------------------------------------------------------------------------------ widgets
 
 def button(x, y, w, h, label, ui, key=None, primary=False, enabled=True, right=None, on=False):
     """primary = the accent fill; otherwise a raised graphite surface with a hairline. `on` = a toggle that's on."""
-    hit = flashing(key) if key else False
+    t, down = feel(x, y, w, h, enabled=enabled)
+    down = down or (flashing(key) if key else False)
     if primary and enabled:
-        box(x, y, w, h, 10 * ui, ACC_HI if hit else ACC)
+        box(x, y, w, h, 10 * ui, ACC_LO if down else mix(ACC, ACC_HI, t))
         tc, rc = WHITE, (1, 1, 1, 0.75)
     elif primary:
         box(x, y, w, h, 10 * ui, S1, LINE)
         tc, rc = T3, T3
     else:
-        box(x, y, w, h, 8 * ui, S3 if (hit or on) else S2, LINE)
-        tc, rc = (T1 if enabled else T3), T3
+        rest, lit = (S3, S4) if on else (S2, S2H)
+        box(x, y, w, h, 8 * ui, S1 if down else mix(rest, lit, t), mix(LINE, (1, 1, 1, 0.16), t))
+        tc, rc = (mix(T1, WHITE, t) if enabled else T3), T3
     size = 12
+    dy = -1 * ui if down else 0                     # held down, the label sits a pixel lower
     if right:
-        text(x + 14 * ui, mid_y(y, h, size, ui), label, size, tc, ui, maxw=w - 28 * ui - text_w(right, 11, ui) - 8 * ui)
-        text(x + w - 14 * ui, mid_y(y, h, 11, ui), right, 11, rc, ui, align="right")
+        text(x + 14 * ui, mid_y(y, h, size, ui) + dy, label, size, tc, ui,
+             maxw=w - 28 * ui - text_w(right, 11, ui) - 8 * ui)
+        text(x + w - 14 * ui, mid_y(y, h, 11, ui) + dy, right, 11, rc, ui, align="right")
     else:
-        text(x + w / 2, mid_y(y, h, size, ui), label, size, tc, ui, align="center", maxw=w - 12 * ui)
+        text(x + w / 2, mid_y(y, h, size, ui) + dy, label, size, tc, ui, align="center", maxw=w - 12 * ui)
 
 
-def checkbox(x, y, h, label, on, ui, col=T2):
+def checkbox(x, y, h, label, on, ui, col=T2, w=None):
+    """a tick box and its label (w = the row's width, so the whole row answers to the mouse)"""
+    t, down = feel(x, y, w, h) if w else (0.0, False)
     s = 14 * ui
     by = y + h / 2 - s / 2
-    if on:
-        box(x, by, s, s, 4 * ui, ACC)
+    f = tween(("tick",) + _key(x, y, s), 1.0 if on else 0.0, MOVE_S)
+    box(x, by, s, s, 4 * ui, S1, mix((1, 1, 1, 0.18), (1, 1, 1, 0.42), t))
+    if f > 0.01:
+        k = s * (0.6 + 0.4 * f)                     # the fill grows from the middle
+        box(x + (s - k) / 2, by + (s - k) / 2, k, k, 4 * ui, mix(S1, ACC_LO if down else ACC, f))
+    if f > 0.5:
         g_check(x, by, s, WHITE, ui)
-    else:
-        box(x, by, s, s, 4 * ui, S1, (1, 1, 1, 0.18))
-    text(x + s + 8 * ui, mid_y(y, h, 12, ui), label, 12, col, ui)
+    text(x + s + 8 * ui, mid_y(y, h, 12, ui), label, 12, mix(col, T1, t), ui,
+         maxw=(w - s - 8 * ui) if w else None)
 
 
-def switch(x, y, h, on, ui):
-    """a small on/off switch, right-aligned at x"""
+def switch(x, y, h, on, ui, t=0.0, key=None):
+    """a small on/off switch, right-aligned at x (t = how far a hover has faded in)"""
     w, s = 26 * ui, 14 * ui
     by = y + h / 2 - s / 2
-    box(x - w, by, w, s, s / 2, ACC if on else S3)
+    f = tween(("switch",) + (key or _key(x - w, y, w)), 1.0 if on else 0.0, MOVE_S)
+    box(x - w, by, w, s, s / 2, mix(mix(S3, S4, t), mix(ACC, ACC_HI, t), f))
     k = s - 4 * ui
-    box((x - k - 2 * ui) if on else (x - w + 2 * ui), by + 2 * ui, k, k, k / 2, WHITE if on else T2)
+    left, right = x - w + 2 * ui, x - k - 2 * ui
+    box(left + (right - left) * f, by + 2 * ui, k, k, k / 2, mix(mix(T2, T1, t), WHITE, f))
 
 
 def segmented(x, y, w, h, items, active, ui, key_prefix="", tabs=False):
-    """a segmented control: a graphite track, the chosen segment a surface step. Only the panel's own tabs get the
-    accent underline, so a choice inside a tab never reads as a second tab bar."""
+    """a segmented control: a graphite track, the chosen segment a surface step that slides to where it's put. Only the
+    panel's own tabs get the accent underline, so a choice inside a tab never reads as a second tab bar."""
     box(x, y, w, h, 8 * ui, S1, LINE)
     sw = (w - 4 * ui) / len(items)
-    for i, (val, label) in enumerate(items):
-        sx = x + 2 * ui + i * sw
-        is_on = val == active
-        if is_on or flashing(f"{key_prefix}{val}"):
-            box(sx, y + 2 * ui, sw, h - 4 * ui, 6 * ui, S3)
-        if is_on and tabs:
+    vals = [v for v, _l in items]
+    feels = [feel(x + 2 * ui + i * sw, y, sw, h) for i in range(len(items))]
+    for i, (t, down) in enumerate(feels):           # the mouse over one that isn't chosen
+        lit = down or flashing(f"{key_prefix}{vals[i]}")
+        if vals[i] != active and (t > 0.01 or lit):
+            box(x + 2 * ui + i * sw, y + 2 * ui, sw, h - 4 * ui, 6 * ui, mix(S1, S2H, 1.0 if lit else t))
+    if active in vals:
+        at = vals.index(active)
+        pos = tween(("seg",) + _key(x, y, w), float(at), MOVE_S)
+        sx = x + 2 * ui + pos * sw
+        box(sx, y + 2 * ui, sw, h - 4 * ui, 6 * ui, mix(S3, S4, feels[at][0]))
+        if tabs:
             box(sx + sw * 0.32, y + 3 * ui, sw * 0.36, 2 * ui, 1 * ui, ACC)
-        text(sx + sw / 2, mid_y(y, h, 12, ui), label, 12, T1 if is_on else T2, ui, align="center", maxw=sw - 6 * ui)
+    for i, (val, label) in enumerate(items):
+        text(x + 2 * ui + i * sw + sw / 2, mid_y(y, h, 12, ui), label, 12,
+             T1 if val == active else mix(T2, T1, feels[i][0]), ui, align="center", maxw=sw - 6 * ui)
 
 
 def chips(x, y, w, h, items, active, ui):
@@ -373,8 +496,11 @@ def chips(x, y, w, h, items, active, ui):
     for i, (val, label) in enumerate(items):
         cx = x + i * (cw + gap)
         on = val == active
-        box(cx, y, cw, h, 8 * ui, S3 if on else S2, LINE)
-        text(cx + cw / 2, mid_y(y, h, 12, ui), label, 12, T1 if on else T2, ui, align="center", maxw=cw - 4 * ui)
+        t, down = feel(cx, y, cw, h)
+        rest, lit = (S3, S4) if on else (S2, S2H)
+        box(cx, y, cw, h, 8 * ui, S1 if down else mix(rest, lit, t), mix(LINE, (1, 1, 1, 0.16), t))
+        text(cx + cw / 2, mid_y(y, h, 12, ui) - (1 * ui if down else 0), label, 12, T1 if on else mix(T2, T1, t), ui,
+             align="center", maxw=cw - 4 * ui)
 
 
 def pill(x, y, h, label, ui, align="left", key=None, enabled=True):
@@ -382,8 +508,12 @@ def pill(x, y, h, label, ui, align="left", key=None, enabled=True):
     w = text_w(label, 11, ui) + 20 * ui
     ph = 20 * ui
     px = x - w if align == "right" else x
-    box(px, y + h / 2 - ph / 2, w, ph, 6 * ui, S3 if (key and flashing(key)) else S2, LINE)
-    text(px + w / 2, mid_y(y, h, 11, ui), label, 11, T1 if enabled else T3, ui, align="center")
+    py = y + h / 2 - ph / 2
+    t, down = feel(px, py, w, ph, enabled=enabled)
+    down = down or bool(key and flashing(key))
+    box(px, py, w, ph, 6 * ui, S1 if down else mix(S2, S4, t), mix(LINE, (1, 1, 1, 0.18), t))
+    text(px + w / 2, mid_y(y, h, 11, ui) - (1 * ui if down else 0), label, 11, T1 if enabled else T3, ui,
+         align="center")
     return w
 
 
@@ -402,38 +532,52 @@ def section(x, y, w, h, label, ui, link=None, note=None, key=None):
 
 
 def switch_row(x, y, w, h, label, on, ui, col=T2):
-    text(x, mid_y(y, h, 12, ui), label, 12, col, ui, maxw=w - 34 * ui)
-    switch(x + w, y, h, on, ui)
+    t, _down = feel(x, y, w, h)
+    text(x, mid_y(y, h, 12, ui), label, 12, mix(col, T1, t), ui, maxw=w - 34 * ui)
+    switch(x + w, y, h, on, ui, t, key=_key(x, y, w))
+
+
+def glow(x, y, w, h, ui, kind="tool", r=6.0, inset=2.0):
+    """a faint lit band behind a row the mouse is over (rows of a list, a line that folds); returns how lit it is"""
+    t, down = feel(x, y, w, h, kind)
+    if t > 0.01 or down:
+        box(x + inset * ui, y + 1 * ui, w - 2 * inset * ui, h - 2 * ui, r * ui,
+            (1, 1, 1, 0.075 if down else 0.045 * t))
+    return t
 
 
 def field(x, y, w, h, label, value, ui, kind="list", dim=False, first=False, last=False):
     """one row of a grouped list: label on the left, its value on the right, hairline under it"""
-    text(x + 12 * ui, mid_y(y, h, 12, ui), label, 12, T2, ui)
+    t = glow(x, y, w, h, ui, "menu" if kind == "list" else "tool")
+    text(x + 12 * ui, mid_y(y, h, 12, ui), label, 12, mix(T2, T1, t), ui)
     lw = text_w(label, 12, ui)
     rx = x + w - 12 * ui
     if kind == "list":
-        g_updown(rx - 12 * ui, y + h / 2 - 7 * ui, 14 * ui, T3, ui)
+        g_updown(rx - 12 * ui, y + h / 2 - 7 * ui, 14 * ui, mix(T3, T1, t), ui)
         rx -= 18 * ui
-    text(rx, mid_y(y, h, 12, ui), value, 12, T3 if dim else T1, ui, align="right", maxw=w - lw - 60 * ui)
+    text(rx, mid_y(y, h, 12, ui), value, 12, mix(T3, T2, t) if dim else T1, ui, align="right",
+         maxw=w - lw - 60 * ui)
     if not last:
         hair(x + 12 * ui, y, w - 12 * ui, ui)
 
 
 def slider(x, y, w, h, label, value, frac, ui, centred=False):
     """label, the figure, and a thin track under them (centred = the fill grows from the middle)"""
-    text(x, y + h - 15 * ui, label, 12, T2, ui)
+    t, _down = feel(x, y, w, h, "slider")
+    text(x, y + h - 15 * ui, label, 12, mix(T2, T1, t), ui)
     text(x + w, y + h - 15 * ui, value, 12, T1, ui, align="right", mono=True)
     ty = y + 5 * ui
-    box(x, ty, w, 3 * ui, 1.5 * ui, S3)
+    box(x, ty, w, 3 * ui, 1.5 * ui, mix(S3, S4, t))
     frac = max(0.0, min(1.0, frac))
+    fill = mix(T2, ACC, t)                          # the mouse on it: the fill takes the accent
     if centred:
         a, b = sorted((0.5, frac))
-        box(x + w * a, ty, max(2 * ui, w * (b - a)), 3 * ui, 1.5 * ui, T2)
+        box(x + w * a, ty, max(2 * ui, w * (b - a)), 3 * ui, 1.5 * ui, fill)
         rect(x + w / 2 - 0.5 * ui, ty - 2 * ui, 1 * ui, 7 * ui, T3)
     else:
-        box(x, ty, max(2 * ui, w * frac), 3 * ui, 1.5 * ui, T2)
-    k = 9 * ui
-    box(x + w * frac - k / 2, ty + 1.5 * ui - k / 2, k, k, k / 2, T1)
+        box(x, ty, max(2 * ui, w * frac), 3 * ui, 1.5 * ui, fill)
+    k = (9 + 3 * t) * ui                            # and the knob grows a little
+    box(x + w * frac - k / 2, ty + 1.5 * ui - k / 2, k, k, k / 2, mix(T1, WHITE, t))
 
 
 def status_line(x, y, w, h, s, kind, ui, size=12):
@@ -631,9 +775,11 @@ def _paint():
         return
     region = bpy.context.region
     d = DRAW.get(region.as_pointer()) if region is not None else None
-    if d is None or d["seen"] == d["token"]:
+    if d is None:
         return
-    d["seen"] = d["token"]                          # paint only right after the panel was laid out
+    # Painted on every redraw of this sidebar, not only after a new layout: when the mouse moves onto a button Blender
+    # may redraw without laying the panels out again. The markers say whether the panel is on show at all.
+    d["seen"] = d["token"]
     try:
         ui = bpy.context.preferences.system.ui_scale
         scroll = region.view2d.view_to_region(0, 0, clip=False)[1]
@@ -670,6 +816,17 @@ def _paint():
             above += h
         if not ys:
             return
+        # what Blender drew under the panel, read before it's painted over: hot() finds the hovered button in it
+        top = ys[0] + d["rows"][0][0] * ui
+        sx, sy = max(0, int(x0)), max(0, int(ys[-1]))
+        sw, sh = min(region.width, int(x1) + 1) - sx, min(region.height, int(top) + 1) - sy
+        LIVE.update(snap=None, ox=sx, oy=sy, x0=x0, top=top, ui=ui, region=region.as_pointer(), want=False)
+        if sw > 8 and sh > 8:
+            try:
+                LIVE["snap"] = _read(gpu.state.active_framebuffer_get(), sx, sy, sw, sh)
+                LIVE["theme"] = _theme()
+            except Exception:  # noqa: BLE001 - no hover then; everything else still works
+                LIVE["snap"] = None
         gpu.state.blend_set("ALPHA")
         pad = PAD * ui
         if bare:                                        # outlines only: do the rows sit on the real buttons?
@@ -678,13 +835,18 @@ def _paint():
                       (1.0, 0.9, 0.1, 0.9), 1.0, "LINE_LOOP")
             gpu.state.blend_set("NONE")
             return
-        top = ys[0] + d["rows"][0][0] * ui
         box(x0 - CARD_L * ui, ys[-1], (x1 - x0) + (CARD_L + CARD_R) * ui, top - ys[-1], 12 * ui, BG, LINE)
         for (h, paint), y in zip(d["rows"], ys):
             hh = h * ui
             if paint is not None and y < region.height and y + hh > 0:
                 paint(x0 + pad, y, (x1 - x0) - 2 * pad, hh, ui)
         gpu.state.blend_set("NONE")
+        LIVE["snap"] = None
+        if LIVE["want"] and not LIVE["timer"]:          # something is still easing: one more frame
+            LIVE["timer"] = True
+            bpy.app.timers.register(_next_frame, first_interval=1 / 60)
+    except ReferenceError:
+        gpu.state.blend_set("NONE")                 # something in the file went away mid-frame: the next layout has it right
     except Exception as e:  # noqa: BLE001 - never repeat a drawing error on every redraw: the plain panel takes over
         STATE["broken"] = True
         print(f"FitBridge: the drawn panel is off ({e!r}); showing the plain one")
@@ -725,4 +887,8 @@ def unregister():
         STATE["icons"] = None
     STATE["ids"] = []
     DRAW.clear()
+    TWEEN.clear()
+    LIVE.update(snap=None, timer=False, want=False)
+    if bpy.app.timers.is_registered(_next_frame):
+        bpy.app.timers.unregister(_next_frame)
     _TEX.clear()

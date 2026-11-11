@@ -86,9 +86,11 @@ def build(rows, context):
         link, short, link_col = "Roblox Studio not connected", "Not connected", T3
 
     def p_head(x, y, w, h, ui):
+        t, _down = kit.feel(x, y, w, h)
         kit.g_mark(x, y + h / 2 - 12 * ui, 24 * ui, ui)
         kit.text(x + 36 * ui, mid_y(y, h, 14, ui), "FitBridge", 14, T1, ui)
-        kit.g_chev(x + w - 14 * ui, y + h / 2 - 7 * ui, 14 * ui, T3, ui, "right" if st.ui_collapsed else "down")
+        kit.g_chev(x + w - 14 * ui, y + h / 2 - 7 * ui, 14 * ui, kit.mix(T3, T1, t), ui,
+                   "right" if st.ui_collapsed else "down")
         room = w - 36 * ui - kit.text_w("FitBridge", 14, ui) - 52 * ui
         say = next((t for t in (link, short) if kit.text_w(t, 11, ui) + 12 * ui <= room), "")
         tw = kit.text(x + w - 24 * ui, mid_y(y, h, 11, ui), say, 11, T2, ui, align="right") if say else -6 * ui
@@ -185,8 +187,10 @@ def build_verdict(rows, st, res):
             f"See all {n} checks" if not (fails or warns) else f"{len(passing)} more pass")
 
         def p_fold(x, y, w, h, ui):
-            kit.text(x + 20 * ui, mid_y(y, h, 11, ui), label, 11, T3, ui)
-            kit.g_chev(x + w - 14 * ui, y + h / 2 - 7 * ui, 14 * ui, T3, ui, "up" if st.ui_checks_open else "down")
+            t = kit.glow(x, y, w, h, ui)
+            kit.text(x + 20 * ui, mid_y(y, h, 11, ui), label, 11, kit.mix(T3, T1, t), ui)
+            kit.g_chev(x + w - 14 * ui, y + h / 2 - 7 * ui, 14 * ui, kit.mix(T3, T1, t), ui,
+                       "up" if st.ui_checks_open else "down")
         rows.add(24, real=lambda r: setter(r, "scene", "ui_checks_open"), paint=p_fold)
 
 
@@ -224,7 +228,8 @@ def build_gauge(rows, res):
             kit.box(ax, cy - 1.5 * ui, aw, 3 * ui, 1.5 * ui, S3)                   # the allowed box
             for ex in (ax, ax + aw):
                 kit.rect(ex - 0.5 * ui, cy - 5 * ui, 1 * ui, 10 * ui, T3)
-            c0, c1 = max(-0.14, min(1.14, lo)), max(-0.14, min(1.14, hi))
+            c0 = kit.tween(("gauge", a, 0), max(-0.14, min(1.14, lo)), kit.MOVE_S)
+            c1 = kit.tween(("gauge", a, 1), max(-0.14, min(1.14, hi)), kit.MOVE_S)
             x0, x1 = ax + aw * c0, ax + aw * c1
             if x1 - x0 < 3 * ui:
                 x1 = x0 + 3 * ui
@@ -295,9 +300,10 @@ def build_setup(rows, context, st, res, problem):
 TILE = 148.0
 
 
-def p_tile(context, x, y, s, ui, empty="Fit a mesh to see its thumbnail"):
-    """the thumbnail as it stands, square, drawn live"""
-    kit.box(x, y, s, s, 10 * ui, S1, LINE)
+def p_tile(context, x, y, s, ui, empty="Fit a mesh to see its thumbnail", button=False):
+    """the thumbnail as it stands, square, drawn live (button = a click on it renders it full size)"""
+    t, _down = kit.feel(x, y, s, s, enabled=button)
+    kit.box(x, y, s, s, 10 * ui, S1, kit.mix(LINE, (1, 1, 1, 0.3), t))
     shown = False
     if draw._live_ready(context) and not draw._live["broken"]:
         try:
@@ -320,6 +326,7 @@ def p_tile(context, x, y, s, ui, empty="Fit a mesh to see its thumbnail"):
 
 def build_thumb(rows, context, st, p, res):
     g, gob = thumb.owner(context)
+    can_render = evaluate.selection_problem(context) is None     # (the Preview operator's own rule)
     width = inner(rows)
     tile = min(TILE, max(96.0, (width / rows.ui) * 0.5))
     tile -= tile % 4
@@ -350,7 +357,7 @@ def build_thumb(rows, context, st, p, res):
 
     def p_top(x, y, w, h, ui):
         s = tile * ui
-        p_tile(context, x, y + h - s, s, ui)
+        p_tile(context, x, y + h - s, s, ui, button=can_render)
         rx, rw = x + s + 12 * ui, w - s - 12 * ui
         r = rh * ui
         roomy = all(kit.text_w(lab[0], 12, ui) <= rw - 34 * ui for lab, _w, _p, _o in side) and \
@@ -360,8 +367,10 @@ def build_thumb(rows, context, st, p, res):
             kit.switch_row(rx, ry, rw, r, label[0 if roomy else 1], on, ui)
             kit.hair(rx, ry, rw, ui)
         ry = y + h - (len(side) + 1) * r
-        kit.text(rx, mid_y(ry, r, 12, ui), "Open in a window" if roomy else "Window", 12, T2, ui, maxw=rw - 20 * ui)
-        kit.g_chev(rx + rw - 14 * ui, ry + r / 2 - 7 * ui, 14 * ui, T3, ui, "right")
+        t, _down = kit.feel(rx, ry, rw, r)
+        kit.text(rx, mid_y(ry, r, 12, ui), "Open in a window" if roomy else "Window", 12, kit.mix(T2, T1, t), ui,
+                 maxw=rw - 20 * ui)
+        kit.g_chev(rx + rw - 14 * ui + 2 * ui * t, ry + r / 2 - 7 * ui, 14 * ui, kit.mix(T3, T1, t), ui, "right")
     rows.add(tile, real=n_top, paint=p_top, raw=True)
     rows.gap(8)
     rows.add(32, real=lambda r: setter(r, "scene", "thumb_view"),
@@ -410,7 +419,7 @@ def build_thumb(rows, context, st, p, res):
             switch(rows, "Keep the camera level", "prefs", "lock_tilt", p.lock_tilt)
         rows.gap(4)
         rows.add(28, real=lambda r: op(r, "fitbridge.thumb_preview"),
-                 paint=lambda x, y, w, h, ui: kit.button(x, y, w, h, "Render it full size", ui))
+                 paint=lambda x, y, w, h, ui: kit.button(x, y, w, h, "Render it full size", ui, enabled=can_render))
         if res is not None and res.get("fit") is not None and thumb.out_of_frame(res, g):
             rows.gap(4)
             rows.status("Part of the accessory is out of frame", "warn")
@@ -629,16 +638,20 @@ def build_listing(rows, context, st):
         parts = kit.wrap(name, 12, rows.width - 80 * rows.ui, rows.ui)[:3]
 
         def p_name(x, y, w, h, ui, name=name, on=on, last=i == len(names) - 1, parts=parts):
+            t, down = kit.feel(x, y, w, h)
             if on:
-                kit.box(x + 2 * ui, y + 2 * ui, w - 4 * ui, h - 4 * ui, 8 * ui, S3)
+                kit.box(x + 2 * ui, y + 2 * ui, w - 4 * ui, h - 4 * ui, 8 * ui, kit.mix(S3, kit.S4, t))
                 kit.g_check(x + 10 * ui, y + h / 2 - 7 * ui, 14 * ui, ACC, ui)
             else:
-                kit.box(x + 11 * ui, y + h / 2 - 6 * ui, 12 * ui, 12 * ui, 6 * ui, S1, (1, 1, 1, 0.18))
+                if t > 0.01 or down:
+                    kit.box(x + 2 * ui, y + 2 * ui, w - 4 * ui, h - 4 * ui, 8 * ui, (1, 1, 1, 0.07 if down else 0.045 * t))
+                kit.box(x + 11 * ui, y + h / 2 - 6 * ui, 12 * ui, 12 * ui, 6 * ui, S1,
+                        kit.mix((1, 1, 1, 0.18), (1, 1, 1, 0.5), t))
                 if not last:
                     kit.hair(x + 32 * ui, y, w - 32 * ui, ui)
             top = y + h / 2 + (len(parts) - 1) * 8 * ui
             for k, part in enumerate(parts):
-                kit.text(x + 32 * ui, top - k * 16 * ui - 12 * ui * 0.36, part, 12, T1 if on else T2, ui)
+                kit.text(x + 32 * ui, top - k * 16 * ui - 12 * ui * 0.36, part, 12, T1 if on else kit.mix(T2, T1, t), ui)
             if len(name) > 40:
                 kit.text(x + w - 12 * ui, mid_y(y, h, 10.5, ui), f"{len(name)}/50", 10.5,
                          WARN if len(name) > 50 else T3, ui, align="right", mono=True)
@@ -680,7 +693,7 @@ def build_listing(rows, context, st):
         for c in chips:
             rows.add(24, real=lambda r, c=c: op(r, "fitbridge.listing_set", what="chip", value=str(c["id"])),
                      paint=lambda x, y, w, h, ui, c=c: kit.checkbox(x, y, h, str(c.get("name") or c.get("text") or ""),
-                                                                    str(c["id"]) in on_ids, ui))
+                                                                    str(c["id"]) in on_ids, ui, w=w))
 
     price = item.get("price")
     offer = listing.type_offer(data, st.acc_type)
