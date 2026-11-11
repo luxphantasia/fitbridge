@@ -247,6 +247,31 @@ if not isinstance(ears.get(listing.KEY), str):
     fail("the listing is kept on the object")
 done.append("the listing is kept on the object (saved with the file)")
 
+# --- the painter's own check: markers must be as far apart on screen as the row heights between them say
+if kit._agree([(0.0, 500.0), (60.0, 440.0), (200.0, 300.0)], 1.0) != 0.0:
+    fail("markers that match the row heights agree")
+if abs(kit._agree([(0.0, 500.0), (60.0, 432.0)], 1.0) - 8.0) > 1e-6:
+    fail("a marker row 8 px taller than its height says must show up as 8 px of disagreement")
+if abs(kit._agree([(0.0, 1000.0), (60.0, 880.0)], 2.0)) > 1e-6:
+    fail("the check follows the UI scale")
+rows = lay_out()
+if rows.marks:
+    fail("a background Blender has no marker icons, so no row may claim one")
+kit.STATE["ids"], kit.STATE["side"] = list(range(1, kit.MARK_MAX + 1)), 99      # pretend the icons exist
+try:
+    rows = lay_out()
+finally:
+    kit.STATE["ids"], kit.STATE["side"] = [], 0
+tops = [above for _i, above, _h in rows.marks]
+total = sum(h for h, _p in rows.items)
+if not rows.marks or tops[0] > 8 or total - (tops[-1] + rows.marks[-1][2]) > 0.5:
+    fail(f"the panel must start and end with a marker: {tops} of {total}")
+if max(b - a for a, b in zip(tops, tops[1:])) > 200:
+    fail(f"markers must come often enough that one is always in view: {tops}")
+if any(not 12 <= h <= 36 for _i, _a, h in rows.marks):
+    fail("only rows of 12 to 36 px carry markers")
+done.append("markers: at the panel's start and end and never more than 200 px apart; their self-check catches an 8 px error")
+
 for d in done:
     print(" -", d)
 print("PASS listing tab")

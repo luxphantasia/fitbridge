@@ -4,9 +4,13 @@ Blender only lets an add-on draw ON TOP of the sidebar, so the panel is two laye
   * the panel's draw() lays out ordinary Blender buttons and fields in rows of known heights: they take the clicks,
     drags and typing;
   * a POST_PIXEL handler paints the visible panel over exactly those rows.
-The layout never says where a panel ended up (other panels sit above it, the sidebar scrolls), so a few rows carry
-three tiny marker icons in colours nothing else uses. The painter reads those pixels back to find the rows: the middle
-one gives the height, the outer two the left and right edges.
+The layout never says where a panel ended up (other panels sit above or below it, they get dragged into another
+order, the sidebar scrolls), so the rows that have no button of their own carry three small marker icons in colours
+nothing else uses, every 60 pixels or so. The painter reads those pixels back before it paints over them: the middle
+icon of each gives that row's height on screen, the outer two the left and right edges. Every row is then placed from
+the marker nearest to it, so nothing is ever assumed about where the panel is, and a small rounding error can't add up
+down the panel. The markers also check each other: if two of them aren't as far apart as the row heights say they
+should be, the painted buttons can't be trusted to sit on the real ones, and the plain panel takes over instead.
 """
 
 import math
@@ -38,22 +42,25 @@ BAD = (0.878, 0.341, 0.357, 1.0)
 WHITE = (1.0, 1.0, 1.0, 1.0)
 
 UNIT = 20.0                             # Blender's row height at UI scale 1
-PAD = 12.0                              # the card's inner margin
-MARK_H = 12.0                           # a marker row
+PAD = 8.0                               # the buttons' inset from the layout's edges
+CARD_L, CARD_R = 8.0, 6.0               # how far the card reaches past the layout's edges (lines up with Tripo Loop's)
+MARK_H = 12.0                           # a row that is only a marker
+MARK_GAP = 60.0                         # a row without a button carries a marker when the last one is this far up
+MARK_TOL = 3.0                          # pixels two markers may disagree by before the painting isn't trusted
 SIDE_L, SIDE_R, TABS_W = 10.0, 10.0, 22.0   # a first guess at the layout's edges (the markers give the real ones)
 
 FONT = {"ui": 0, "mono": None}
-DRAW = {}                               # region pointer -> {"rows", "marks", "token", "seen", "cache"}
+DRAW = {}                               # region pointer -> {"rows", "marks", "token", "seen", "cache", "strikes"}
 FLASH = {}                              # key -> time of the click
 STATE = {"broken": False, "handle": None, "icons": None, "ids": [], "side": 0}
 _TEX = {}
 
-MARK_MAX = 8
+MARK_MAX = 24
 MARK_SIDE_B = 250
 
 
 def _mark_b(i):
-    return 40 + 20 * i
+    return 24 + 8 * i
 
 
 def _mono():
@@ -380,9 +387,10 @@ def pill(x, y, h, label, ui, align="left", key=None, enabled=True):
     return w
 
 
-def pill_frac(label, width, ui):
-    """the share of a row `width` pixels wide that a pill with this label needs (for the real button under it)"""
-    return max(0.05, min(0.9, (text_w(label, 11, ui) + 24 * ui) / max(width, 1.0)))
+def pill_frac(label, width, ui, inset=0.0):
+    """the share of a layout row `width` pixels wide that the real button under a pill with this label takes, the
+    pill sitting `inset` in from the painted area's end"""
+    return max(0.05, min(0.9, (text_w(label, 11, ui) + (24 + PAD + inset) * ui) / max(width, 1.0)))
 
 
 def section(x, y, w, h, label, ui, link=None, note=None, key=None):
@@ -450,34 +458,41 @@ def status_line(x, y, w, h, s, kind, ui, size=12):
 class Rows:
     """rows of (height at UI scale 1, real(layout), paint(x, y, w, h, ui)). Heights are multiples of 4.
 
-    `width` is how wide the text area will be in pixels, for wrapping. A row's real buttons sit in the same inner
-    area the painter gets, so a fraction of one is the same fraction of the other."""
+    `width` is how wide the text area will be in pixels, for wrapping. A row's real buttons span the whole layout
+    width; the painter draws PAD inside that, so a real button is never smaller than the painted one. (An empty
+    spacer cell can't hold the buttons in: Blender gives it at least 18 pixels whatever the split says.)"""
 
     def __init__(self, layout, context):
         self.col = layout.column(align=True)
         self.items = []
-        self.marks = []                      # (marker index, height above it)
+        self.marks = []                      # (marker index, height above its row, the row's height)
         self.h = 0.0
+        self._marked = -1e9                  # the height at which the last marker sits
         self.ui = context.preferences.system.ui_scale or 1.0
         reg_w = context.region.width if context.region else 300
         self.full = max(120.0, reg_w - (SIDE_L + SIDE_R + TABS_W) * self.ui)       # the layout's width, px
         self.width = self.full - 2 * PAD * self.ui - 4 * self.ui                    # safe text width, px
 
-    def add(self, h, real=None, paint=None, raw=False, full=False):
+    def add(self, h, real=None, paint=None, raw=False, mark=False):
         r = self.col.row(align=True)
         if not raw:
             r.scale_y = h / UNIT
         if real is None:
-            r.label(text="")
-        elif full:
-            real(r)
+            i = len(self.marks)
+            if (mark or self.h - self._marked >= MARK_GAP) and not raw and 12 <= h <= 36 and i < MARK_MAX \
+                    and STATE["ids"]:
+                # the row's height comes from scale_y (measured: an icon scaled by itself makes a 20 px row)
+                a = r.split(factor=0.25, align=True)
+                a.template_icon(icon_value=STATE["side"], scale=1.0)
+                b = a.split(factor=2 / 3, align=True)
+                b.template_icon(icon_value=STATE["ids"][i], scale=1.0)
+                b.template_icon(icon_value=STATE["side"], scale=1.0)
+                self.marks.append((i, self.h, float(h)))
+                self._marked = self.h
+            else:
+                r.label(text="")
         else:
-            f = min(0.3, PAD * self.ui / self.full)
-            sp = r.split(factor=f, align=True)
-            sp.label(text="")
-            rest = sp.split(factor=(1 - 2 * f) / (1 - f), align=True)
-            real(rest.row(align=True))
-            rest.label(text="")
+            real(r)
         self.items.append((h, paint))
         self.h += h
 
@@ -485,19 +500,8 @@ class Rows:
         self.add(h)
 
     def mark(self):
-        """a marker row: lets the painter find where the panel is (see the module's note)"""
-        i = len(self.marks)
-        if i >= MARK_MAX or not STATE["ids"]:
-            return self.gap(MARK_H)
-        r = self.col.row(align=True)
-        a = r.split(factor=0.25, align=True)
-        a.template_icon(icon_value=STATE["side"], scale=MARK_H / UNIT)
-        b = a.split(factor=2 / 3, align=True)
-        b.template_icon(icon_value=STATE["ids"][i], scale=MARK_H / UNIT)
-        b.template_icon(icon_value=STATE["side"], scale=MARK_H / UNIT)
-        self.marks.append((i, self.h))
-        self.items.append((MARK_H, None))
-        self.h += MARK_H
+        """a row that is only a marker (the panel starts and ends with one)"""
+        self.add(MARK_H, mark=True)
 
     def text(self, s, size=11, col=T2, indent=0.0, line=16, mono=False):
         """wrapped text, one row per line"""
@@ -535,7 +539,7 @@ class Rows:
         if context.region is None:
             return
         key = context.region.as_pointer()
-        d = DRAW.setdefault(key, {"token": 0, "seen": -1, "cache": None})
+        d = DRAW.setdefault(key, {"token": 0, "seen": -1, "cache": None, "strikes": 0})
         d.update(rows=self.items, marks=self.marks)
         d["token"] += 1
         if len(DRAW) > 12:
@@ -575,7 +579,7 @@ def _is_mark(a):
 
 
 def _find(region, d, ui):
-    """(x0, x1, top) of the rows in region pixels, from the marker icons; None when none is in view"""
+    """(x0, x1, [(height above, top y on screen), ...]) from every marker in view; None when there is none"""
     W, H = region.width, region.height
     cx = (SIDE_L * ui + W - (SIDE_R + TABS_W) * ui) / 2
     sw = int(64 * ui)
@@ -586,17 +590,20 @@ def _find(region, d, ui):
     if not m.any():
         return None
     b = a[..., 2].astype(np.int16)
-    want = (MARK_H - 6) * ui
-    for i, above in d["marks"]:
-        rows = np.nonzero((m & (np.abs(b - _mark_b(i)) <= 5)).any(axis=1))[0]
+    tops, lines = [], []
+    for i, above, h in d["marks"]:
+        rows = np.nonzero((m & (np.abs(b - _mark_b(i)) <= 3)).any(axis=1))[0]
         if not len(rows):
             continue
         y0, y1 = int(rows[0]), int(rows[-1])
-        if (y1 - y0 + 1) < want - 1.5 or y0 == 0 or y1 == H - 1:      # cut off by the region's edge
+        if abs((y1 - y0 + 1) - (h - 6) * ui) > 2.0 or y0 == 0 or y1 == H - 1:      # cut off, or partly covered
             continue
         cy = (y0 + y1 + 1) / 2
-        line = _read(fb, 0, int(cy), W, 1)[0]
-        side = np.nonzero(_is_mark(line) & (np.abs(line[..., 2].astype(np.int16) - MARK_SIDE_B) <= 5))[0]
+        tops.append((above, cy + h * ui / 2))
+        lines.append(int(cy))
+    for y in lines:                                 # the edges, from the first marker whose outer icons both show
+        line = _read(fb, 0, y, W, 1)[0]
+        side = np.nonzero(_is_mark(line) & (np.abs(line[..., 2].astype(np.int16) - MARK_SIDE_B) <= 3))[0]
         if len(side) < 2:
             continue
         cut = int(np.argmax(np.diff(side))) + 1
@@ -607,8 +614,16 @@ def _find(region, d, ui):
         xr = (right[0] + right[-1] + 1) / 2
         width = (xr - xl) / 0.75
         x0 = xl - width / 8
-        return x0, x0 + width, cy + MARK_H * ui / 2 + above * ui
+        return x0, x0 + width, tops
     return None
+
+
+def _agree(tops, ui):
+    """the most two neighbouring markers disagree by, in pixels (0 when there's only one)"""
+    worst = 0.0
+    for (a0, t0), (a1, t1) in zip(tops, tops[1:]):
+        worst = max(worst, abs((t0 - t1) - (a1 - a0) * ui))
+    return worst
 
 
 def _paint():
@@ -623,23 +638,50 @@ def _paint():
         ui = bpy.context.preferences.system.ui_scale
         scroll = region.view2d.view_to_region(0, 0, clip=False)[1]
         got = _find(region, d, ui)
+        now = time.time()
         if got is not None:
-            d["cache"] = (got[0], got[1], got[2] - scroll)
-        elif d["cache"] is not None:                # no marker in view: where it was, moved with the scrolling
-            got = (d["cache"][0], d["cache"][1], d["cache"][2] + scroll)
+            x0, x1, tops = got
+            off = _agree(tops, ui)
+            d["agree"] = off
+            if off > MARK_TOL + 0.01 * max(a for a, _t in tops) * ui:
+                d["strikes"] = d.get("strikes", 0) + 1
+                if d["strikes"] >= 3:               # the rows aren't where their heights say: don't paint lies
+                    STATE["broken"] = True
+                    print(f"FitBridge: the drawn panel doesn't line up with its buttons ({off:.1f} px off); "
+                          "showing the plain one")
+                    redraw()
+                    return
+            else:
+                d["strikes"] = 0
+            d["cache"] = (x0, x1, [(a, t - scroll) for a, t in tops], now)
+        elif d.get("cache") is not None and now - d["cache"][3] < 1.0:
+            # nothing in view for a moment (something passing over it): where it just was, moved with the scrolling
+            x0, x1 = d["cache"][0], d["cache"][1]
+            tops = [(a, t + scroll) for a, t in d["cache"][2]]
         else:
             return
-        x0, x1, top = got
-        if os.environ.get("FITBRIDGE_UI_BARE"):         # for checking the real buttons under the paint
+        bare = os.environ.get("FITBRIDGE_UI_BARE")      # for checking the real buttons under the paint
+        if bare == "1":
             return
-        total = sum(h for h, _p in d["rows"]) * ui
+        ys, above = [], 0.0                             # every row from the marker nearest to it
+        for h, _p in d["rows"]:
+            a0, t0 = min(tops, key=lambda m: abs(m[0] - above))
+            ys.append(t0 - (above - a0) * ui - h * ui)
+            above += h
+        if not ys:
+            return
         gpu.state.blend_set("ALPHA")
-        box(x0 - 2 * ui, top - total - 2 * ui, (x1 - x0) + 4 * ui, total + 4 * ui, 12 * ui, BG, LINE)
         pad = PAD * ui
-        y = top
-        for h, paint in d["rows"]:
+        if bare:                                        # outlines only: do the rows sit on the real buttons?
+            for (h, _p), y in zip(d["rows"], ys):
+                lines([(x0 + pad, y), (x1 - pad, y), (x1 - pad, y + h * ui), (x0 + pad, y + h * ui)],
+                      (1.0, 0.9, 0.1, 0.9), 1.0, "LINE_LOOP")
+            gpu.state.blend_set("NONE")
+            return
+        top = ys[0] + d["rows"][0][0] * ui
+        box(x0 - CARD_L * ui, ys[-1], (x1 - x0) + (CARD_L + CARD_R) * ui, top - ys[-1], 12 * ui, BG, LINE)
+        for (h, paint), y in zip(d["rows"], ys):
             hh = h * ui
-            y -= hh
             if paint is not None and y < region.height and y + hh > 0:
                 paint(x0 + pad, y, (x1 - x0) - 2 * pad, hh, ui)
         gpu.state.blend_set("NONE")

@@ -45,12 +45,13 @@ def setter(layout, where, prop, value="!"):
 
 
 def inner(rows):
+    """the painted area's width in pixels"""
     return max(120.0, rows.full - 2 * kit.PAD * rows.ui)
 
 
 def section_link(rows, label, link, idname, key=None, **props):
     """a section label with one small action at its right end"""
-    f = kit.pill_frac(link, inner(rows), rows.ui)
+    f = kit.pill_frac(link, rows.full, rows.ui)
 
     def real(r):
         a, b = kit.split(r, 1 - f, f)
@@ -94,7 +95,7 @@ def build(rows, context):
         kit.box(x + w - 24 * ui - tw - 12 * ui, y + h / 2 - 3 * ui, 6 * ui, 6 * ui, 3 * ui, link_col)
     rows.add(36, real=lambda r: setter(r, "scene", "ui_collapsed"), paint=p_head)
     if st.ui_collapsed:
-        rows.mark()                                           # a second marker: a panel above may paint over the first
+        rows.mark()
         return
 
     if not running:
@@ -140,11 +141,11 @@ def build(rows, context):
         build_fit(rows, context, st, res)
 
     if not done:
-        rows.gap(8)                                           # one main button at a time: Send comes back once it's written
+        rows.mark()                                           # one main button at a time: Send comes back once it's written
         return
     rows.mark()
     build_send(rows, context, st, res, is_auto)
-    rows.gap(8)
+    rows.mark()                                               # the panel ends with a marker, as it starts with one
 
 
 # ------------------------------------------------------------------------------------------------------------- Fit
@@ -322,7 +323,7 @@ def build_thumb(rows, context, st, p, res):
     width = inner(rows)
     tile = min(TILE, max(96.0, (width / rows.ui) * 0.5))
     tile -= tile % 4
-    frac = min(0.7, (tile + 12) * rows.ui / width)
+    frac = min(0.7, (kit.PAD + tile + 6) * rows.ui / rows.full)      # the real split: midway in the painted gap
     side = []
     if p is not None:
         side = [(("Show in the 3D view", "3D view"), "prefs", "live_preview", p.live_preview),
@@ -654,10 +655,10 @@ def build_listing(rows, context, st):
     rows.gap(4)
     copied = time.time() - kit.FLASH.get("copied", 0) < 1.5
     clabel = "Copied" if copied else "Copy"
-    cf = kit.pill_frac("Copied", inner(rows) - 16 * rows.ui, rows.ui)
+    cf = kit.pill_frac("Copied", rows.full, rows.ui, inset=8)
 
     def n_copy(r):
-        a, b = kit.split(r, cf + 0.03, 1 - cf - 0.03)
+        a, b = kit.split(r, cf, 1 - cf)
         op(a, "fitbridge.listing_copy")
         b.label(text="")
 
@@ -701,7 +702,7 @@ def build_listing(rows, context, st):
             rows.add(32, paint=p_price)
         if offer:
             use = f"Use {offer}"
-            uf = kit.pill_frac(use, inner(rows), rows.ui) + 0.03
+            uf = kit.pill_frac(use, rows.full, rows.ui, inset=8)
 
             def n_offer(r):
                 a, b = kit.split(r, 1 - uf, uf)
@@ -717,8 +718,8 @@ def build_listing(rows, context, st):
         rows.card(s0)
 
     rows.gap(8)
-    lf = kit.pill_frac(f"Open in {SITE}", inner(rows), rows.ui)
-    rf = kit.pill_frac("Write it again", inner(rows), rows.ui)
+    lf = kit.pill_frac(f"Open in {SITE}", rows.full, rows.ui)
+    rf = kit.pill_frac("Write it again", rows.full, rows.ui)
 
     def n_foot(r):
         a, b, c = kit.split(r, lf, max(0.02, 1 - lf - rf), rf)
