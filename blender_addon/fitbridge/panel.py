@@ -177,7 +177,10 @@ def build_verdict(rows, st, res):
     build_gauge(rows, res)
     rows.gap(8)
     for c in fails + warns:
-        rows.status(c["message"], STATUS[c["status"]])
+        if c["id"] == "watertight":
+            open_edges_row(rows, c)
+        else:
+            rows.status(c["message"], STATUS[c["status"]])
     passing = [c for c in checks if c["status"] == "pass"]
     if passing:
         if st.ui_checks_open:
@@ -192,6 +195,21 @@ def build_verdict(rows, st, res):
             kit.g_chev(x + w - 14 * ui, y + h / 2 - 7 * ui, 14 * ui, kit.mix(T3, T1, t), ui,
                        "up" if st.ui_checks_open else "down")
         rows.add(24, real=lambda r: setter(r, "scene", "ui_checks_open"), paint=p_fold)
+
+
+def open_edges_row(rows, c):
+    """the open-edges warning, with a button that shows them: Edit Mode, edge select, every hole's rim selected"""
+    f = kit.pill_frac("Select them", rows.full, rows.ui)
+
+    def real(r):
+        a, b = kit.split(r, 1 - f, f)
+        a.label(text="")
+        op(b, "fitbridge.select_open_edges")
+
+    def paint(x, y, w, h, ui):
+        bw = kit.pill(x + w, y, h, "Select them", ui, align="right")
+        kit.status_line(x, y, w - bw - 8 * ui, h, c["message"], STATUS[c["status"]], ui)
+    rows.add(24, real=real, paint=paint)
 
 
 def build_gauge(rows, res):
@@ -951,6 +969,46 @@ class FB_OT_listing_open(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class FB_OT_select_open_edges(bpy.types.Operator):
+    bl_idname = "fitbridge.select_open_edges"
+    bl_label = "Select open edges"
+    bl_description = "Go to Edit Mode on the accessory and select the edges around every hole, opening and ripped " \
+                     "edge (the ones this warning counts), so you can see and close them"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _listing_ob(context) is not None and context.mode in ("OBJECT", "EDIT_MESH")
+
+    def execute(self, context):
+        import bmesh
+        ob = _listing_ob(context)
+        if ob is None or ob.type != "MESH":
+            return {"CANCELLED"}
+        if context.mode == "EDIT_MESH" and context.edit_object is not ob:
+            bpy.ops.object.mode_set(mode="OBJECT")
+        if context.mode == "OBJECT":
+            for o in context.selected_objects:
+                o.select_set(False)
+            ob.select_set(True)
+            context.view_layer.objects.active = ob
+            bpy.ops.object.mode_set(mode="EDIT")
+        bm = bmesh.from_edit_mesh(ob.data)
+        # an open edge has exactly one face: the rim of a hole, the edge of a sheet, both sides of a rip
+        edges = [e for e in bm.edges if e.is_boundary and not e.hide]
+        if not edges:
+            self.report({"INFO"}, "No open edges on the mesh as it is in Edit Mode (a modifier may be opening it)")
+            return {"CANCELLED"}
+        bpy.ops.mesh.select_mode(type="EDGE")
+        bpy.ops.mesh.select_all(action="DESELECT")
+        for e in edges:
+            e.select_set(True)
+        bm.select_flush_mode()
+        bmesh.update_edit_mesh(ob.data, loop_triangles=False, destructive=False)
+        self.report({"INFO"}, f"{len(edges):,} open edge{'s' * (len(edges) != 1)} selected")
+        return {"FINISHED"}
+
+
 class FB_OT_open_prefs(bpy.types.Operator):
     bl_idname = "fitbridge.open_prefs"
     bl_label = "Open the preferences"
@@ -965,5 +1023,5 @@ class FB_OT_open_prefs(bpy.types.Operator):
         return {"FINISHED"}
 
 
-classes = (FB_OT_ui_set, FB_OT_edit_text, FB_OT_open_prefs, FB_OT_listing_write, FB_OT_listing_name, FB_OT_listing_copy,
+classes = (FB_OT_ui_set, FB_OT_edit_text, FB_OT_open_prefs, FB_OT_select_open_edges, FB_OT_listing_write, FB_OT_listing_name, FB_OT_listing_copy,
            FB_OT_listing_set, FB_OT_listing_open)

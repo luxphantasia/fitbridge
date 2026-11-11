@@ -551,7 +551,12 @@ class FB_PT_main(bpy.types.Panel):
             pass                                               # these would be about a mesh you may not mean
         elif res is not None:
             for c in res["checks"]:
-                col.label(text=c["message"], icon=ICONS[c["status"]])
+                if c["id"] == "watertight" and c["status"] != "pass":
+                    row = col.row(align=True)
+                    row.label(text=c["message"], icon=ICONS[c["status"]])
+                    row.operator("fitbridge.select_open_edges", text="Select them")
+                else:
+                    col.label(text=c["message"], icon=ICONS[c["status"]])
         elif not evaluate.in_use(context):
             col.label(text="Show R15 or R6 to start", icon="INFO")
 

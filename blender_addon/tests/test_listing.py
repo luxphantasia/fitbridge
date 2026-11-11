@@ -247,6 +247,30 @@ if not isinstance(ears.get(listing.KEY), str):
     fail("the listing is kept on the object")
 done.append("the listing is kept on the object (saved with the file)")
 
+# --- the open-edges warning has a button that selects them
+bm2 = bmesh.new()
+bmesh.ops.create_grid(bm2, x_segments=2, y_segments=2, size=1.0)     # an open sheet: 8 rim edges, 4 inside
+sheet_me = bpy.data.meshes.new("Sheet")
+bm2.to_mesh(sheet_me)
+bm2.free()
+sheet = bpy.data.objects.new("Sheet", sheet_me)
+ctx.scene.collection.objects.link(sheet)
+for o in ctx.view_layer.objects:
+    o.select_set(o is sheet)
+ctx.view_layer.objects.active = sheet
+if bpy.ops.fitbridge.select_open_edges() != {"FINISHED"} or ctx.mode != "EDIT_MESH":
+    fail("Select them goes to Edit Mode on the accessory")
+bme = bmesh.from_edit_mesh(sheet_me)
+picked = [e for e in bme.edges if e.select]
+if len(picked) != 8 or not all(e.is_boundary for e in picked):
+    fail(f"exactly the open edges are selected: {len(picked)}")
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.data.objects.remove(sheet)
+for o in ctx.view_layer.objects:
+    o.select_set(o is ears)
+ctx.view_layer.objects.active = ears
+done.append("open edges: the warning's button goes to Edit Mode and selects exactly the rims")
+
 # --- the painter's own check: markers must be as far apart on screen as the row heights between them say
 if kit._agree([(0.0, 500.0), (60.0, 440.0), (200.0, 300.0)], 1.0) != 0.0:
     fail("markers that match the row heights agree")
