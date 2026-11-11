@@ -45,6 +45,9 @@ class Fake(BaseHTTPRequestHandler):
     def do_POST(self):
         SEEN["auth"].add(self.headers.get("Authorization"))
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if len(body) > (1 << 20):                               # the real site's cap on a request
+            SEEN["refused"] = SEEN.get("refused", 0) + 1
+            return self._json(413, {"error": "That request is too big."})
         if self.path.endswith("/chips"):
             SEEN["chips"].append(json.loads(body)["ids"])
             return self._json(200, {"listing": dict(DONE, chip_ids=json.loads(body)["ids"])})
@@ -57,7 +60,7 @@ threading.Thread(target=srv.serve_forever, daemon=True).start()
 os.environ["FITBRIDGE_STUDIO_URL"] = f"http://127.0.0.1:{srv.server_address[1]}"
 
 import bl_ext.user_default.fitbridge as fb  # noqa: E402
-from bl_ext.user_default.fitbridge import batch, evaluate, host, listing, panel  # noqa: E402
+from bl_ext.user_default.fitbridge import batch, evaluate, host, listing, panel, thumb  # noqa: E402
 from bl_ext.user_default.fitbridge import ui as kit  # noqa: E402
 
 done = []
@@ -170,8 +173,12 @@ if not pump(lambda: listing.state(ears)[0] == "done"):
 post = SEEN["posts"][0]
 if post["path"] != "/api/blender/v1/listings" or not post["type"].startswith("multipart/form-data"):
     fail("the pictures go to /listings as a form")
-if post["body"].count(b'name="image"') != 4 or post["body"].count(b"\x89PNG") != 4:
-    fail("four PNG pictures")
+if post["body"].count(b'name="image"') != 4 or post["body"].count(b"Content-Type: image/jpeg\r\n\r\n\xff\xd8") != 4:
+    fail("four JPEG pictures")
+if len(post["body"]) > listing.SEND_MAX + 4096 or SEEN.get("refused"):
+    fail("the request must fit under the site's 1 MB cap")
+if not all(x.endswith(".jpg") for x in listing.stored(ears)["pictures"]):
+    fail("the kept pictures are the JPEGs that were sent")
 if b"Blake from RWBY" not in post["body"] or b'name="no_colour"' in post["body"]:
     fail("the note is sent; no_colour only for an item with recolours")
 if SEEN["auth"] != {"Bearer blender-test-key"} or b"blender-test-key" in post["body"]:
@@ -182,7 +189,31 @@ if data["variant"] != "adjacent" or listing.copy_of(data)["names"][0] != "Shadow
 if len(data["pictures"]) != 4 or not all(os.path.isfile(x) for x in data["pictures"]):
     fail("the four pictures are kept for the panel")
 lay_out()
-done.append("Write the listing: 4 PNGs + note as a form, key in the header only, polls until done, kept on the object")
+done.append("Write the listing: 4 JPEGs + note as a form under 1 MB, key in the header only, polls until done, kept on "
+            "the object")
+
+# --- a texture too busy to fit: the pictures are taken again smaller until the request fits
+tries, real_shots = [], thumb.render_shots
+
+
+def busy_shots(context, ob, centre, shots, size, **k):
+    tries.append((size, k.get("jpeg")))
+    return [b"\xff\xd8" + bytes(400_000 if len(tries) < 3 else 150_000)] * len(shots)
+
+
+thumb.render_shots = busy_shots
+try:
+    fitted = listing.take_pictures(ctx, ears, "FLAT")
+finally:
+    thumb.render_shots = real_shots
+if tries != [(768, 90), (768, 80), (640, 80)] or sum(len(x) for x in fitted) > listing.SEND_MAX:
+    fail(f"pictures too big to send are taken again smaller until they fit: {tries}")
+saved_fmt = (ctx.scene.render.image_settings.file_format, ctx.scene.render.image_settings.quality)
+if listing.take_pictures(ctx, ears, "STUDIO")[0][:2] != b"\xff\xd8":
+    fail("the pictures are JPEGs")
+if (ctx.scene.render.image_settings.file_format, ctx.scene.render.image_settings.quality) != saved_fmt:
+    fail("taking JPEG pictures must put the file format and quality back")
+done.append("pictures stepped down in size and quality until the request fits; your output format is put back")
 
 # --- picking a name fills FitBridge's Name; again clears it
 bpy.ops.fitbridge.listing_name(index=0)

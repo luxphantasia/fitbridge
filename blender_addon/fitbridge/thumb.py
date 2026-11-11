@@ -483,9 +483,10 @@ def frame_shot(V, turn, tilt, fill=0.88):
     return max(distance, 0.2), (float(pan[0]), float(pan[1]))
 
 
-def render_shots(context, ob, centre, shots, size, also=(), background=(0.5, 0.5, 0.5), light="STUDIO"):
-    """PNG bytes of ob (plus the objects in `also`) through the thumbnail's own lens, for each (turn, tilt, distance,
-    pan). Your file's cameras, render settings and output path all come back afterwards."""
+def render_shots(context, ob, centre, shots, size, also=(), background=(0.5, 0.5, 0.5), light="STUDIO", jpeg=0):
+    """picture bytes of ob (plus the objects in `also`) through the thumbnail's own lens, for each (turn, tilt,
+    distance, pan): PNG, or JPEG at quality `jpeg` (1 to 100) when that is given. Your file's cameras, render settings
+    and output path all come back afterwards."""
     sc = context.scene
     r = sc.render
     shading = sc.display.shading
@@ -495,13 +496,15 @@ def render_shots(context, ob, centre, shots, size, also=(), background=(0.5, 0.5
     cam = bpy.data.objects.new("FitBridge Auto", data)
     sc.collection.objects.link(cam)
     saved = (r.filepath, r.image_settings.file_format, r.image_settings.color_mode, shading.background_type,
-             tuple(shading.background_color))
+             tuple(shading.background_color), r.image_settings.quality)
     out = []
     try:
         with tempfile.TemporaryDirectory() as folder, _isolated(context, [ob, *also], cam, size):
             r.film_transparent = False
-            r.image_settings.file_format = "PNG"
+            r.image_settings.file_format = "JPEG" if jpeg else "PNG"
             r.image_settings.color_mode = "RGB"
+            if jpeg:
+                r.image_settings.quality = int(jpeg)
             shading.background_type = "VIEWPORT"
             shading.background_color = background
             shading.light = light                              # _isolated puts your own back
@@ -510,12 +513,13 @@ def render_shots(context, ob, centre, shots, size, also=(), background=(0.5, 0.5
                 m[:3, 3] += centre
                 cam.matrix_world = Matrix(m.tolist())
                 context.view_layer.update()
-                r.filepath = os.path.join(folder, f"shot{i}.png")
+                r.filepath = os.path.join(folder, f"shot{i}.jpg" if jpeg else f"shot{i}.png")
                 _render_still(context)
                 with open(r.filepath, "rb") as f:
                     out.append(f.read())
     finally:
         r.filepath, r.image_settings.file_format, r.image_settings.color_mode = saved[:3]
+        r.image_settings.quality = saved[5]
         shading.background_type, shading.background_color = saved[3], saved[4]
         bpy.data.objects.remove(cam)
         bpy.data.cameras.remove(data)

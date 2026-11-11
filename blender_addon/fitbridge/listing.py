@@ -11,6 +11,7 @@ everything that touches Blender data happens in tick() on the main thread.
 import json
 import os
 import queue
+import re
 import threading
 import time
 import urllib.error
@@ -25,7 +26,10 @@ from .version import VERSION
 KEY = "fitbridge_listing"                    # on the object: the listing as JSON
 ANGLES = ((0.0, 5.0), (35.0, 15.0), (90.0, 5.0), (180.0, 10.0))      # front, three-quarter, side, back
 VIEW_NAMES = ("Front", "Three-quarter", "Side", "Back")
-SHOT_SIZE = 768
+# Paradyse refuses a request over 1 MB, so the four pictures go as JPEGs that fit with room to spare for the note:
+# full size when they do (nearly always), stepped down (size, JPEG quality) for a texture too busy to fit
+SEND_MAX = 900 << 10
+SHOT_TRIES = ((768, 90), (768, 80), (640, 80), (512, 75))
 POLL_EVERY = float(os.environ.get("FITBRIDGE_LISTING_POLL", "3.0"))
 POLL_FOR = 600.0
 HELLO_FOR = 60.0
@@ -90,22 +94,28 @@ def _request(path, method="GET", body=None, headers=None, timeout=60):
         raise StudioError("Paradyse doesn't have listings for Blender yet")
 
 
-def _multipart(fields, pngs):
+def _kind(pic):
+    """(file ending, type) of a picture's bytes"""
+    return ("jpg", "image/jpeg") if pic[:2] == b"\xff\xd8" else ("png", "image/png")
+
+
+def _multipart(fields, pics):
     edge = uuid.uuid4().hex
     out = []
     for k, v in fields.items():
         out.append(f'--{edge}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
-    for i, png in enumerate(pngs):
-        out.append(f'--{edge}\r\nContent-Disposition: form-data; name="image"; filename="view{i + 1}.png"\r\n'
-                   f'Content-Type: image/png\r\n\r\n'.encode() + png + b"\r\n")
+    for i, pic in enumerate(pics):
+        end, kind = _kind(pic)
+        out.append(f'--{edge}\r\nContent-Disposition: form-data; name="image"; filename="view{i + 1}.{end}"\r\n'
+                   f'Content-Type: {kind}\r\n\r\n'.encode() + pic + b"\r\n")
     out.append(f"--{edge}--\r\n".encode())
     return b"".join(out), {"Content-Type": f"multipart/form-data; boundary={edge}"}
 
 
-def _work(name, fields, pngs):
+def _work(name, fields, pics):
     """send the pictures, then ask until it's written"""
     try:
-        body, headers = _multipart(fields, pngs)
+        body, headers = _multipart(fields, pics)
         got = _request("/listings", "POST", body, headers, timeout=120)["listing"]
         _done.put(("listing", name, got, None))
         until = time.time() + POLL_FOR
@@ -250,6 +260,21 @@ def pictures_dir(ob):
     return d
 
 
+def take_pictures(context, ob, light):
+    """the four views as JPEG bytes that fit in one request to Paradyse (None for a mesh with no faces)"""
+    centre, verts = thumb.centred_verts(context, ob)
+    if not len(verts):
+        return None
+    shots = [(t, ti, *thumb.frame_shot(verts, t, ti)) for t, ti in ANGLES]
+    pics = []
+    for size, quality in SHOT_TRIES:
+        pics = thumb.render_shots(context, ob, centre, shots, size, light="STUDIO" if light == "STUDIO" else "FLAT",
+                                  jpeg=quality)
+        if sum(len(p) for p in pics) <= SEND_MAX:
+            break
+    return pics
+
+
 def start(context, ob, note, light):
     """render the four views and send them. Returns what's wrong in words, or None once it's on its way."""
     if busy():
@@ -257,20 +282,22 @@ def start(context, ob, note, light):
     if not available():
         return "Add your Paradyse Blender key in the preferences first"
     try:
-        centre, verts = thumb.centred_verts(context, ob)
-        if not len(verts):
-            return "The mesh has no faces"
-        shots = [(t, ti, *thumb.frame_shot(verts, t, ti)) for t, ti in ANGLES]
-        pngs = thumb.render_shots(context, ob, centre, shots, SHOT_SIZE,
-                                  light="STUDIO" if light == "STUDIO" else "FLAT")
+        pics = take_pictures(context, ob, light)
     except Exception as e:  # noqa: BLE001
         return f"Couldn't take the pictures: {e}"
+    if pics is None:
+        return "The mesh has no faces"
+    if sum(len(p) for p in pics) > SEND_MAX:
+        return "The pictures are too big to send, even made smaller"
     paths = []
     d = pictures_dir(ob)
-    for i, png in enumerate(pngs):
-        path = os.path.join(d, f"view{i + 1}.png")
+    for old in os.listdir(d):                                  # the last listing's pictures of this item
+        if re.fullmatch(r"view\d\.(png|jpg)", old):
+            os.remove(os.path.join(d, old))
+    for i, pic in enumerate(pics):
+        path = os.path.join(d, f"view{i + 1}.{_kind(pic)[0]}")
         with open(path, "wb") as f:
-            f.write(png)
+            f.write(pic)
         paths.append(path)
     fields = {"note": note.strip()[:500]}
     if len(batch.family(context, ob)) > 1:
@@ -278,7 +305,7 @@ def start(context, ob, note, light):
     old = stored(ob) or {}
     _keep(ob, {"listing": None, "variant": old.get("variant") or "", "pictures": paths, "light": light})
     RUN.update(ob=ob.name, step="Sending the pictures", started=time.time(), error="", error_ob=None)
-    threading.Thread(target=_work, args=(ob.name, fields, pngs), daemon=True).start()
+    threading.Thread(target=_work, args=(ob.name, fields, pics), daemon=True).start()
     return None
 
 
