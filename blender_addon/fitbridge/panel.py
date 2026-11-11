@@ -325,7 +325,8 @@ def p_tile(context, x, y, s, ui, empty="Fit a mesh to see its thumbnail", button
     shown = False
     if draw._live_ready(context) and not draw._live["broken"]:
         try:
-            draw._render_live(context, int(draw.LIVE_SIZE * ui))
+            # (the same buffer the viewport's own live thumbnail uses, at its size: a zoomed sidebar must not resize it)
+            draw._render_live(context, int(draw.LIVE_SIZE * (context.preferences.system.ui_scale or 1.0)))
             kit.picture(draw._live["offscreen"].texture_color, x + 1, y + 1, s - 2, s - 2)
             kit.corners(x + 1, y + 1, s - 2, s - 2, 9 * ui, kit.BG)
             if draw.centre_dot_on(context):

@@ -17,6 +17,14 @@ Blender itself lightens the real button the mouse is over, and redraws. Before p
 under the panel and each painted control looks at its own patch: lighter than a resting button means the mouse is on
 it, the pressed colour means it's held down. So the painted hover is always the button a click would really hit.
 Changes of state are eased over about a tenth of a second (tween); while one runs, the sidebar is redrawn each frame.
+
+Size: a sidebar can be zoomed (Ctrl + middle-drag, or a pinch), and Blender's interface scale can be anything. Both
+scale the real buttons, so one number carries both through layout and painting: `scale(region)` = interface scale x
+the sidebar's zoom, in pixels per layout unit. Nothing here may assume it is 1.
+
+When the paint can't be trusted (markers disagreeing, or any error while painting), that sidebar shows the plain panel
+instead. Not for good: it tries the drawn panel again as soon as the sidebar's size, zoom or scale changes, and
+otherwise every so often.
 """
 
 import math
@@ -85,9 +93,62 @@ def _mono():
     return FONT["mono"]
 
 
-def usable():
-    """can the drawn panel work here? (not without a window, and not after its drawing failed once)"""
-    return not bpy.app.background and not STATE["broken"] and bool(STATE["ids"])
+def zoom_of(region):
+    """how far this sidebar is zoomed: screen pixels per layout unit (1 = not zoomed)"""
+    try:
+        v = region.view2d
+        z = 1000.0 / (v.region_to_view(0, 1000)[1] - v.region_to_view(0, 0)[1])
+        return z if 0.2 < z < 6.0 else 1.0
+    except Exception:  # noqa: BLE001 - a region without a view: not zoomed
+        return 1.0
+
+
+def unit_px():
+    """screen pixels per layout unit before any zoom. Not simply the interface scale: Blender's row unit is 18 scaled
+    pixels plus a line-width border on each side (20 at scale 1, 29 at scale 1.5), and rows are built from it."""
+    return row_unit() / 20.0
+
+
+def scale(region):
+    """screen pixels per layout unit in this sidebar: Blender's row unit times the sidebar's own zoom"""
+    return unit_px() * zoom_of(region)
+
+
+def _signature(region):
+    return (round(zoom_of(region), 3), region.width, round(unit_px(), 3))
+
+
+def usable(region=None):
+    """can the drawn panel work here, now? Not without a window or marker icons; and not in a sidebar where the paint
+    just failed to line up, until that sidebar changes or a while has passed."""
+    if bpy.app.background or STATE["broken"] or not STATE["ids"]:
+        return False
+    d = DRAW.get(region.as_pointer()) if region is not None else None
+    return not (d is not None and _plain_now(region, d))
+
+
+def _plain_now(region, d):
+    """is this sidebar showing the plain panel for the moment? (ends when the sidebar changes or the wait is over)"""
+    p = d.get("plain")
+    if not p:
+        return False
+    if p["sig"] == _signature(region) and time.time() < p["until"]:
+        d["rows"], d["marks"] = [], []              # nothing of the drawn panel is laid out: nothing to paint
+        return True
+    d["plain"] = None                               # it changed, or enough time has passed: try the drawn panel again
+    d["strikes"] = 0
+    return False
+
+
+def _give_up(region, d, why):
+    """this sidebar shows the plain panel for now (it comes back by itself, see usable)"""
+    tries = d.get("gave_up", 0) + 1
+    d["gave_up"] = tries
+    d["plain"] = {"sig": _signature(region), "until": time.time() + min(120.0, 10.0 * 2 ** (tries - 1))}
+    d["strikes"] = 0
+    if tries <= 2:
+        print(f"FitBridge: {why}; showing the plain panel in this sidebar until it lines up again")
+    redraw()
 
 
 # ------------------------------------------------------------------------------------------------ primitives
@@ -609,12 +670,15 @@ class Rows:
     def __init__(self, layout, context):
         self.col = layout.column(align=True)
         self.items = []
-        self.marks = []                      # (marker index, height above its row, the row's height)
+        self.marks = []                      # (marker index, which row it is, the row's height)
         self.h = 0.0
         self._marked = -1e9                  # the height at which the last marker sits
-        self.ui = context.preferences.system.ui_scale or 1.0
+        base = unit_px()
+        self.ui = scale(context.region) if context.region else base                # pixels per layout unit
         reg_w = context.region.width if context.region else 300
-        self.full = max(120.0, reg_w - (SIDE_L + SIDE_R + TABS_W) * self.ui)       # the layout's width, px
+        # the layout's width in pixels (a guess for wrapping text; the painter measures the real edges). The margins
+        # zoom with the sidebar, the strip of tabs doesn't.
+        self.full = max(120.0, reg_w - (SIDE_L + SIDE_R) * self.ui - TABS_W * base)
         self.width = self.full - 2 * PAD * self.ui - 4 * self.ui                    # safe text width, px
 
     def add(self, h, real=None, paint=None, raw=False, mark=False):
@@ -631,7 +695,7 @@ class Rows:
                 b = a.split(factor=2 / 3, align=True)
                 b.template_icon(icon_value=STATE["ids"][i], scale=1.0)
                 b.template_icon(icon_value=STATE["side"], scale=1.0)
-                self.marks.append((i, self.h, float(h)))
+                self.marks.append((i, len(self.items), float(h)))
                 self._marked = self.h
             else:
                 r.label(text="")
@@ -722,11 +786,34 @@ def _is_mark(a):
     return (a[..., 0] > 238) & (a[..., 1] < 18)
 
 
-def _find(region, d, ui):
-    """(x0, x1, [(height above, top y on screen), ...]) from every marker in view; None when there is none"""
+def row_unit():
+    """Blender's row unit in whole pixels: 18 scaled pixels plus a line-width border on each side (20 at scale 1)"""
+    s = bpy.context.preferences.system
+    return int(math.floor(18.0 * (s.ui_scale or 1.0) + 0.5)) + 2 * int(s.pixel_size or 1)
+
+
+def row_px(h, unit):
+    """a row of `h` layout units in pixels, before zoom: Blender cuts every row down to whole pixels (measured at
+    scales 0.75, 1.1, 1.25 and 1.5: only this rule puts every marker within a pixel or two)"""
+    return float(math.floor(h * unit / 20.0 + 1e-6))
+
+
+def _edges(d, zoom):
+    """the top of every row below the panel's first, in pixels at this zoom (edges[k] = rows above row k)"""
+    unit = row_unit()
+    out, total = [0.0], 0.0
+    for h, _p in d["rows"]:
+        total += row_px(h, unit) * zoom
+        out.append(total)
+    return out
+
+
+def _find(region, d, ui, edges):
+    """(x0, x1, [(row index, top y on screen), ...]) from every marker in view; None when there is none"""
     W, H = region.width, region.height
-    cx = (SIDE_L * ui + W - (SIDE_R + TABS_W) * ui) / 2
-    sw = int(64 * ui)
+    base = unit_px()
+    cx = (SIDE_L * ui + W - SIDE_R * ui - TABS_W * base) / 2     # (tabs on the other side move it 22 px: still in the strip)
+    sw = int(max(64 * ui, 72 * base))
     sx = int(max(0, min(W - sw, cx - sw / 2)))
     fb = gpu.state.active_framebuffer_get()
     a = _read(fb, sx, 0, sw, H)
@@ -735,15 +822,19 @@ def _find(region, d, ui):
         return None
     b = a[..., 2].astype(np.int16)
     tops, lines = [], []
-    for i, above, h in d["marks"]:
+    for i, row, _h in d["marks"]:
+        if row + 1 >= len(edges):
+            continue
         rows = np.nonzero((m & (np.abs(b - _mark_b(i)) <= 3)).any(axis=1))[0]
         if not len(rows):
             continue
         y0, y1 = int(rows[0]), int(rows[-1])
-        if abs((y1 - y0 + 1) - (h - 6) * ui) > 2.0 or y0 == 0 or y1 == H - 1:      # cut off, or partly covered
-            continue
+        hp = edges[row + 1] - edges[row]
+        # the icon is its row less an edge of about 6.5 px that doesn't zoom (measured: zoom 0.79 to 1.36, scale 0.75 to 1.5)
+        if abs((y1 - y0 + 1) - (hp - 6.5 * base)) > 2.5 * max(1.0, base) or y0 == 0 or y1 == H - 1:
+            continue                                # cut off by the region's edge, or partly covered
         cy = (y0 + y1 + 1) / 2
-        tops.append((above, cy + h * ui / 2))
+        tops.append((row, cy + hp / 2))
         lines.append(int(cy))
     for y in lines:                                 # the edges, from the first marker whose outer icons both show
         line = _read(fb, 0, y, W, 1)[0]
@@ -762,11 +853,12 @@ def _find(region, d, ui):
     return None
 
 
-def _agree(tops, ui):
-    """the most two neighbouring markers disagree by, in pixels (0 when there's only one)"""
+def _agree(tops, edges):
+    """the most two neighbouring markers disagree by, in pixels (0 when there's only one): are they as far apart on
+    screen as the rows between them are tall?"""
     worst = 0.0
-    for (a0, t0), (a1, t1) in zip(tops, tops[1:]):
-        worst = max(worst, abs((t0 - t1) - (a1 - a0) * ui))
+    for (r0, t0), (r1, t1) in zip(tops, tops[1:]):
+        worst = max(worst, abs((t0 - t1) - (edges[r1] - edges[r0])))
     return worst
 
 
@@ -781,43 +873,47 @@ def _paint():
     # may redraw without laying the panels out again. The markers say whether the panel is on show at all.
     d["seen"] = d["token"]
     try:
-        ui = bpy.context.preferences.system.ui_scale
+        if not d.get("rows"):
+            return                                  # the plain panel is on show in this sidebar
+        zoom = zoom_of(region)
+        ui = unit_px() * zoom
+        edges = _edges(d, zoom)
         scroll = region.view2d.view_to_region(0, 0, clip=False)[1]
-        got = _find(region, d, ui)
+        got = _find(region, d, ui, edges)
         now = time.time()
         if got is not None:
             x0, x1, tops = got
-            off = _agree(tops, ui)
+            off = _agree(tops, edges)
             d["agree"] = off
-            if off > MARK_TOL + 0.01 * max(a for a, _t in tops) * ui:
+            if off > MARK_TOL + 0.01 * edges[-1]:
                 d["strikes"] = d.get("strikes", 0) + 1
                 if d["strikes"] >= 3:               # the rows aren't where their heights say: don't paint lies
-                    STATE["broken"] = True
-                    print(f"FitBridge: the drawn panel doesn't line up with its buttons ({off:.1f} px off); "
-                          "showing the plain one")
-                    redraw()
+                    _give_up(region, d, f"the drawn panel doesn't line up with its buttons ({off:.1f} px off)")
                     return
             else:
                 d["strikes"] = 0
-            d["cache"] = (x0, x1, [(a, t - scroll) for a, t in tops], now)
+                d["gave_up"] = 0
+            d["cache"] = (x0, x1, [(r, t - scroll) for r, t in tops], now)
         elif d.get("cache") is not None and now - d["cache"][3] < 1.0:
             # nothing in view for a moment (something passing over it): where it just was, moved with the scrolling
             x0, x1 = d["cache"][0], d["cache"][1]
-            tops = [(a, t + scroll) for a, t in d["cache"][2]]
+            tops = [(r, t + scroll) for r, t in d["cache"][2] if r < len(edges)]
+            if not tops:
+                return
         else:
             return
         bare = os.environ.get("FITBRIDGE_UI_BARE")      # for checking the real buttons under the paint
         if bare == "1":
             return
-        ys, above = [], 0.0                             # every row from the marker nearest to it
-        for h, _p in d["rows"]:
-            a0, t0 = min(tops, key=lambda m: abs(m[0] - above))
-            ys.append(t0 - (above - a0) * ui - h * ui)
-            above += h
+        ys, hs = [], []                                 # every row from the marker nearest to it
+        for k in range(len(d["rows"])):
+            r0, t0 = min(tops, key=lambda m: abs(edges[m[0]] - edges[k]))
+            hs.append(edges[k + 1] - edges[k])
+            ys.append(t0 - (edges[k + 1] - edges[r0]))
         if not ys:
             return
         # what Blender drew under the panel, read before it's painted over: hot() finds the hovered button in it
-        top = ys[0] + d["rows"][0][0] * ui
+        top = ys[0] + hs[0]
         sx, sy = max(0, int(x0)), max(0, int(ys[-1]))
         sw, sh = min(region.width, int(x1) + 1) - sx, min(region.height, int(top) + 1) - sy
         LIVE.update(snap=None, ox=sx, oy=sy, x0=x0, top=top, ui=ui, region=region.as_pointer(), want=False)
@@ -830,14 +926,13 @@ def _paint():
         gpu.state.blend_set("ALPHA")
         pad = PAD * ui
         if bare:                                        # outlines only: do the rows sit on the real buttons?
-            for (h, _p), y in zip(d["rows"], ys):
-                lines([(x0 + pad, y), (x1 - pad, y), (x1 - pad, y + h * ui), (x0 + pad, y + h * ui)],
+            for y, hh in zip(ys, hs):
+                lines([(x0 + pad, y), (x1 - pad, y), (x1 - pad, y + hh), (x0 + pad, y + hh)],
                       (1.0, 0.9, 0.1, 0.9), 1.0, "LINE_LOOP")
             gpu.state.blend_set("NONE")
             return
         box(x0 - CARD_L * ui, ys[-1], (x1 - x0) + (CARD_L + CARD_R) * ui, top - ys[-1], 12 * ui, BG, LINE)
-        for (h, paint), y in zip(d["rows"], ys):
-            hh = h * ui
+        for (_h, paint), y, hh in zip(d["rows"], ys, hs):
             if paint is not None and y < region.height and y + hh > 0:
                 paint(x0 + pad, y, (x1 - x0) - 2 * pad, hh, ui)
         gpu.state.blend_set("NONE")
@@ -848,9 +943,8 @@ def _paint():
     except ReferenceError:
         gpu.state.blend_set("NONE")                 # something in the file went away mid-frame: the next layout has it right
     except Exception as e:  # noqa: BLE001 - never repeat a drawing error on every redraw: the plain panel takes over
-        STATE["broken"] = True
-        print(f"FitBridge: the drawn panel is off ({e!r}); showing the plain one")
-        redraw()
+        gpu.state.blend_set("NONE")
+        _give_up(region, d, f"the drawn panel hit an error ({e!r})")
 
 
 def register():

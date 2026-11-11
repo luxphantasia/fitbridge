@@ -485,7 +485,7 @@ class FB_PT_main(bpy.types.Panel):
         if p is not None and not p.welcomed:
             p.welcomed = True                       # the panel has been found: the viewport hint goes away
             context.preferences.is_dirty = True
-        if kit.usable() and not (p is not None and p.plain_panel):
+        if kit.usable(context.region) and not (p is not None and p.plain_panel):
             rows = kit.Rows(self.layout, context)
             panel.build(rows, context)
             rows.publish(context)
