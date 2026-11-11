@@ -8,7 +8,7 @@ ever sent. Code: `blender_addon/fitbridge/listing.py`, the tab itself in `panel.
 
 ## What happens
 
-1. **Pictures.** The selected accessory alone, from the front, three-quarter, side and back (768 px PNG, Workbench,
+1. **Pictures.** The selected accessory alone, from the front, three-quarter, side and back (768 px JPEG, Workbench,
    through the thumbnail's own lens). "Flat colours" (the default) shows the texture as it is; "Soft light" is Blender's
    studio light. Your render settings are put back afterwards.
 2. **Send.** The four pictures, the optional note, and `no_colour=1` when other objects share the mesh (recolours: Send
@@ -51,3 +51,6 @@ listing = { id, status: "running" | "done" | "failed", step, error, url, chip_id
 - Blender starts on `adjacent` when there is one, as the site's page does. An adjacent name lowers an item's
   visibility; nothing here says an item is safe to sell.
 - Errors are `{ error }` in words, shown as they are. 401 and 403 mean the key was refused.
+- The site refuses any request over 1 MB ("That request is too big."), so FitBridge keeps the four pictures under
+  900 KB together: JPEG at quality 90, and for a texture too busy to fit, taken again at a lower quality and size
+  (`SHOT_TRIES` in `listing.py`). PNGs of a textured item were 2.3 MB and never arrived.
