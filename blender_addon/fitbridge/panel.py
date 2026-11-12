@@ -17,7 +17,7 @@ import webbrowser
 import bpy
 from bpy.props import IntProperty, StringProperty
 
-from . import auto, batch, draw, evaluate, host, listing, reduce, rig, server, spec, thumb, upload
+from . import auto, batch, draw, evaluate, host, listing, reduce, rig, server, spec, thumb, upload, variants
 from . import ui as kit
 from .ui import ACC, BAD, GOOD, LINE, S1, S2, S3, T1, T2, T3, WARN, mid_y
 
@@ -159,6 +159,28 @@ def build_fit(rows, context, st, res):
         build_verdict(rows, st, res)
         rows.mark()
     build_setup(rows, context, st, res, problem)
+    if not problem and evaluate.target_object(context) is not None:
+        build_colours(rows, context, st)
+
+
+def build_colours(rows, context, st):
+    """Colour versions: how many, and one button"""
+    rows.gap(12)
+    rows.add(24, paint=lambda x, y, w, h, ui: kit.section(x, y, w, h, "Colour versions", ui))
+    s0 = rows.n()
+    rows.add(32, real=lambda r: r.prop(st, "colour_count", text=""),
+             paint=lambda x, y, w, h, ui: kit.field(x, y, w, h, "How many", str(st.colour_count), ui, kind="number",
+                                                    last=True))
+    rows.card(s0)
+    rows.gap(4)
+    busy = variants.STATE["busy"]
+    n = st.colour_count
+    label = "Picking colours..." if busy else f"Make {n} colour{'s' if n != 1 else ''}"
+    rows.add(28, real=lambda r: op(r, "fitbridge.make_colours"),
+             paint=lambda x, y, w, h, ui: kit.button(x, y, w, h, label, ui, enabled=not busy))
+    if variants.STATE["message"]:
+        rows.gap(4)
+        rows.status(variants.STATE["message"], variants.STATE["kind"])
 
 
 def build_verdict(rows, st, res):
