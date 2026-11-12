@@ -17,7 +17,7 @@ import webbrowser
 import bpy
 from bpy.props import IntProperty, StringProperty
 
-from . import auto, batch, draw, evaluate, host, listing, rig, server, spec, thumb, upload
+from . import auto, batch, draw, evaluate, host, listing, reduce, rig, server, spec, thumb, upload
 from . import ui as kit
 from .ui import ACC, BAD, GOOD, LINE, S1, S2, S3, T1, T2, T3, WARN, mid_y
 
@@ -179,6 +179,8 @@ def build_verdict(rows, st, res):
     for c in fails + warns:
         if c["id"] == "watertight":
             open_edges_row(rows, c)
+        elif c["id"] == "triangles" and c["status"] == "fail":
+            reduce_row(rows, c)
         else:
             rows.status(c["message"], STATUS[c["status"]])
     passing = [c for c in checks if c["status"] == "pass"]
@@ -208,6 +210,23 @@ def open_edges_row(rows, c):
 
     def paint(x, y, w, h, ui):
         bw = kit.pill(x + w, y, h, "Select them", ui, align="right")
+        kit.status_line(x, y, w - bw - 8 * ui, h, c["message"], STATUS[c["status"]], ui)
+    rows.add(24, real=real, paint=paint)
+
+
+def reduce_row(rows, c, inset=0.0):
+    """the triangles check, with LODForge's one-click reduce at its end (greyed, saying why, without LODForge)"""
+    ok = reduce.available()
+    pl = reduce.label() if ok else "Needs LODForge"
+    f = kit.pill_frac(pl, rows.full, rows.ui, inset * rows.ui)
+
+    def real(r):
+        a, b = kit.split(r, 1 - f, f)
+        a.label(text="")
+        op(b, "fitbridge.reduce_tris")
+
+    def paint(x, y, w, h, ui):
+        bw = kit.pill(x + w, y, h, pl, ui, align="right", enabled=ok)
         kit.status_line(x, y, w - bw - 8 * ui, h, c["message"], STATUS[c["status"]], ui)
     rows.add(24, real=real, paint=paint)
 
@@ -469,6 +488,9 @@ def build_auto(rows, context, res):
         rows.status(line.rstrip("."), "busy")
     else:
         rows.status(line, "warn" if kind == "no_key" else "bad")
+    tri = reduce.tri_check(res) if kind != "problem" else None
+    if tri is not None:
+        reduce_row(rows, tri, inset=12)
     rows.width = full
     rows.gap(8)
     for i in range(s0, rows.n()):                             # nudge those rows in from the card's edge
