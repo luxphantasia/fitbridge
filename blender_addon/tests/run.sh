@@ -25,5 +25,16 @@ if [ $code -eq 0 ]; then                       # the Listing tab against a fake 
     FITBRIDGE_LISTING_POLL=0.1 "$BLENDER" -b --python-exit-code 1 --python "$HERE/test_listing.py"
   code=$?
 fi
+if [ $code -eq 0 ]; then                       # the Reduce button, with a built Modeling Suite (private) if you have one
+  if [ -n "$MODELING_SUITE_BUILD" ] && [ -d "$MODELING_SUITE_BUILD" ]; then
+    mkdir -p "$T/blender/extensions/user_default"
+    cp -R "$MODELING_SUITE_BUILD" "$T/blender/extensions/user_default/modeling_suite"
+    HOME="$T" BLENDER_USER_RESOURCES="$T/blender" FITBRIDGE_CACHE="$T/cache5" FITBRIDGE_PORT="${FITBRIDGE_PORT:-47298}" \
+      "$BLENDER" -b --python-exit-code 1 --python "$HERE/test_reduce.py"
+    code=$?
+  else
+    echo "skipped test_reduce.py: set MODELING_SUITE_BUILD to a built modeling_suite folder"
+  fi
+fi
 rm -rf "$T"
 exit $code

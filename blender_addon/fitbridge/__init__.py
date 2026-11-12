@@ -10,7 +10,7 @@ import bpy
 from bpy.props import (BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty,
                        PointerProperty, StringProperty)
 
-from . import auto, batch, draw, evaluate, host, listing, panel, rig, server, spec, thumb, upload
+from . import auto, batch, draw, evaluate, host, listing, panel, reduce, rig, server, spec, thumb, upload
 from . import ui as kit
 
 ICONS = {"pass": "CHECKMARK", "warn": "ERROR", "fail": "CANCEL"}
@@ -555,6 +555,10 @@ class FB_PT_main(bpy.types.Panel):
                     row = col.row(align=True)
                     row.label(text=c["message"], icon=ICONS[c["status"]])
                     row.operator("fitbridge.select_open_edges", text="Select them")
+                elif c["id"] == "triangles" and c["status"] == "fail":
+                    row = col.row(align=True)
+                    row.label(text=c["message"], icon=ICONS[c["status"]])
+                    row.operator("fitbridge.reduce_tris", text=reduce.label() if reduce.available() else reduce.NEEDS)
                 else:
                     col.label(text=c["message"], icon=ICONS[c["status"]])
         elif not evaluate.in_use(context):
@@ -770,7 +774,7 @@ def _on_load(*_args):
 classes = (FB_Thumb, FB_Settings, *_PREF_CLASSES, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_thumb_preset, FB_OT_thumb_preview,
            FB_OT_send,
            FB_OT_send_set, FB_OT_live_window, FB_OT_auto_retry, FB_OT_auto_ignore, FB_OT_restart_server,
-           *panel.classes, FB_PT_main)
+           *panel.classes, *reduce.classes, FB_PT_main)
 
 
 def register():
