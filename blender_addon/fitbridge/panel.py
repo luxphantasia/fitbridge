@@ -227,7 +227,12 @@ def reduce_row(rows, c, inset=0.0):
 
     def paint(x, y, w, h, ui):
         bw = kit.pill(x + w, y, h, pl, ui, align="right", enabled=ok)
-        kit.status_line(x, y, w - bw - 8 * ui, h, c["message"], STATUS[c["status"]], ui)
+        room = w - bw - 8 * ui - 22 * ui                     # the line's text, after its icon
+        msg = c["message"]                                    # "33,584 / 4,000 triangles", shorter when it can't fit
+        n = msg.split(" ", 1)[0]
+        say = next((t for t in (msg, msg.replace(" triangles", ""), f"{n} tris")
+                    if kit.text_w(t, 12, ui) <= room), f"{n} tris")
+        kit.status_line(x, y, w - bw - 8 * ui, h, say, STATUS[c["status"]], ui)
     rows.add(24, real=real, paint=paint)
 
 
