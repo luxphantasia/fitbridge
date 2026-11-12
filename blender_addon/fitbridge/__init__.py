@@ -10,7 +10,7 @@ import bpy
 from bpy.props import (BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty,
                        PointerProperty, StringProperty)
 
-from . import auto, batch, draw, evaluate, host, listing, panel, reduce, rig, server, spec, thumb, upload
+from . import auto, batch, draw, evaluate, host, listing, panel, reduce, rig, server, spec, thumb, upload, variants
 from . import ui as kit
 
 ICONS = {"pass": "CHECKMARK", "warn": "ERROR", "fail": "CANCEL"}
@@ -148,6 +148,8 @@ class FB_Settings(bpy.types.PropertyGroup):
     thumb_default: PointerProperty(type=FB_Thumb)            # the shot before an accessory mesh is picked
     thumb_saved: StringProperty()
     revision: IntProperty(default=0)
+    colour_count: IntProperty(name="Colours", default=4, min=1, max=12,
+                              description="How many colour versions to make (up to 12)")
 
 
 class FB_PrefProps(bpy.types.PropertyGroup):
@@ -565,6 +567,14 @@ class FB_PT_main(bpy.types.Panel):
             col.label(text="Show R15 or R6 to start", icon="INFO")
 
         box = lay.box()
+        box.label(text="Colour versions", icon="COLOR")
+        row = box.row(align=True)
+        row.prop(st, "colour_count", text="How many")
+        row.operator("fitbridge.make_colours", text="Make colours")
+        if variants.STATE["message"]:
+            box.label(text=variants.STATE["message"])
+
+        box = lay.box()
         box.label(text="Thumbnail", icon="CAMERA_DATA")
         row = box.row(align=True)
         row.prop(st, "thumb_view", toggle=True, icon="VIEW_CAMERA")
@@ -774,7 +784,7 @@ def _on_load(*_args):
 classes = (FB_Thumb, FB_Settings, *_PREF_CLASSES, FB_OT_spawn_r15, FB_OT_spawn_r6, FB_OT_show_rig, FB_OT_reset_camera, FB_OT_thumb_preset, FB_OT_thumb_preview,
            FB_OT_send,
            FB_OT_send_set, FB_OT_live_window, FB_OT_auto_retry, FB_OT_auto_ignore, FB_OT_restart_server,
-           *panel.classes, *reduce.classes, FB_PT_main)
+           *panel.classes, *reduce.classes, *variants.classes, FB_PT_main)
 
 
 def register():
