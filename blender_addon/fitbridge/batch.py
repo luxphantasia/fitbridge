@@ -136,10 +136,73 @@ def _ask_colour(key, png):
     return word[:20]
 
 
+def colour_manifest(plain, rev, it, textures, mesh_sha, sendable=True):
+    """one colour's manifest in a set: the /v1/package shape plus `colour` and `is_original`, without its `upload`
+    block (Send all colours adds that once the colour has uploaded; a set that is only built never gets one)"""
+    return {**plain, "protocol": 1, "revision": rev, "name": it["name"], "textures": textures, "pbr": it["pbr"],
+            "mesh": {**plain["mesh"], "sha256": mesh_sha}, "sendable": bool(sendable), "override": False,
+            "colour": it["colour"], "is_original": it["original"]}
+
+
+def build_set(context, original, others, res, rev, labels=None, colour_only=False):
+    """The set Send all colours would make, built here and never uploaded: no Open Cloud call, no thread, nothing
+    told to Studio. For a caller that hands the finished item to something else (the UGC autopilot gives it to
+    Paradyse, which publishes only after a check and an approval).
+
+    original = the fitted mesh, others = its recolours (sharing its mesh), res = the original's evaluate() result.
+    labels = {object name: colour word} for copies whose name doesn't say. colour_only leaves out normal, roughness
+    and metalness maps, so each colour is one colour map at the colour-only size.
+
+    Returns {"manifest": /v1/set's description (items carry no `upload`), "mesh": /v1/set/mesh's JSON as bytes,
+    "items": [{"object", "colour", "name", "original", "pixels": {map: RGBA8, top row first}, "png": the colour
+    map as PNG bytes or None, "glb": exactly what upload.write_glb would send}]}, the original first.
+    Raises ValueError with a sentence when the set can't be built."""
+    if res.get("fit") is None or res.get("mesh") is None:
+        raise ValueError(f"{original.name} isn't fitted yet.")
+    labels = labels or {}
+    base = base_name(context, original)
+    lim = spec.limits()
+    words = unique([labels.get(m.name) or colour_word(m, original) or m.name for m in others])
+    mesh = evaluate.build_mesh(res)
+    mesh_sha = hashlib.sha256(json.dumps(mesh).encode()).hexdigest()
+    plain = evaluate.manifest_fields(context, res, original.fitbridge_thumb)
+    built, manifests = [], []
+    for m, word in [(original, None), *zip(others, words)]:
+        mat = m.material_slots[0].material if m.material_slots else None
+        maps = evaluate.find_textures(mat)
+        if colour_only:
+            maps = {k: (img if k == "color" else None) for k, img in maps.items()}
+        if res["textures"].get("color") is not None and maps.get("color") is None:
+            raise ValueError(f"{m.name} has no colour texture.")
+        pbr = any(maps[k] is not None for k in ("normal", "roughness", "metalness"))
+        target = geom.send_target(lim, pbr)
+        textures, pixels = {}, {}
+        for k, img in maps.items():
+            if img is None:
+                textures[k] = None
+                continue
+            if not (geom.pow2(img.size[0]) and geom.pow2(img.size[1])):
+                raise ValueError(f"{m.name}: its {k} map isn't a power-of-two size ({img.size[0]}x{img.size[1]}).")
+            rgba = geom.shrink_rgba(evaluate.image_rgba8(img), k, target)
+            textures[k] = {"sha256": hashlib.sha256(rgba.tobytes()).hexdigest(), "width": int(rgba.shape[1]),
+                           "height": int(rgba.shape[0])}
+            pixels[k] = rgba
+        it = {"object": m.name, "colour": word, "original": m is original,
+              "name": base[:MAX_NAME] if m is original else item_name(word, base), "pbr": pbr}
+        manifests.append(colour_manifest(plain, rev, it, textures, mesh_sha, sendable=res["ok"]))
+        built.append({**it, "pixels": pixels, "png": upload.png_bytes(pixels["color"]) if "color" in pixels else None,
+                      "glb": upload.write_glb(mesh, pixels, pbr, it["name"])})
+    return {"manifest": {"protocol": 1, "revision": rev, "family": original.name, "name": base, "items": manifests},
+            "mesh": json.dumps({"protocol": 1, "revision": rev, "sha256": mesh_sha, **mesh}).encode(),
+            "items": built}
+
+
 def start(context):
     """gather everything from Blender and start the thread. Returns what's wrong in words, or None when it has started."""
     if busy():
         return "Already sending a set."
+    if upload.locked():
+        return upload.LOCKED
     if not evaluate.selection_problem(context) is None:
         return evaluate.selection_problem(context)
     members = family(context)
@@ -225,9 +288,7 @@ def _work(rev, items, mesh, plain, base, family_name, api_key, creator, claude_k
                 textures[k] = entry
                 pixels[k] = rgba
                 blobs[f"/v1/set/item/{i}/texture/{k}"] = json.dumps(blob).encode()
-            manifest = {**plain, "protocol": 1, "revision": rev, "name": it["name"], "textures": textures, "pbr": it["pbr"],
-                        "mesh": {**plain["mesh"], "sha256": mesh_sha}, "sendable": True, "override": False,
-                        "colour": it["colour"], "is_original": it["original"]}
+            manifest = colour_manifest(plain, rev, it, textures, mesh_sha)
             aid, cached = upload.upload_one(api_key, creator, it["name"], mesh, pixels, it["pbr"],
                                             upload.cache_key(manifest, creator))
             manifest["upload"] = {"state": "done", "model_asset_id": aid, "creator": creator,

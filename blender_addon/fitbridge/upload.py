@@ -23,6 +23,15 @@ USER_AGENT = f"FitBridge-Blender/{VERSION}"
 POLL_EVERY = float(os.environ.get("FITBRIDGE_POLL_EVERY", "2.0"))
 POLL_FOR = 300.0
 GLB_FORMAT = 2     # bump when write_glb's output changes for the same mesh + textures, so models already uploaded aren't reused
+LOCK_ENV = "FITBRIDGE_NO_UPLOAD"
+LOCKED = "Uploads to Roblox are switched off in this Blender (FITBRIDGE_NO_UPLOAD is set)."
+
+
+def locked():
+    """True when this Blender must never upload to Roblox: it was started with FITBRIDGE_NO_UPLOAD set (the UGC
+    autopilot's Blender is). Read from the environment every time, so nothing set up earlier can get around it.
+    Building a package (the mesh, the textures, a .glb) still works: only the Open Cloud calls refuse."""
+    return os.environ.get(LOCK_ENV, "").strip().lower() not in ("", "0", "false", "no", "off")
 
 
 def png_bytes(rgba):
@@ -176,6 +185,8 @@ class OpenCloudError(Exception):
 
 
 def _request(method, url, key, body=None, headers=None):
+    if locked():                                               # the last gate: every Open Cloud call passes here
+        raise OpenCloudError(LOCKED)
     h = {"x-api-key": key, "User-Agent": USER_AGENT, **(headers or {})}
     req = urllib.request.Request(url, data=body, headers=h, method=method)
     try:
@@ -205,6 +216,8 @@ def _multipart(request_json, glb, filename):
 
 def _upload(key, creator, name, mesh, textures, pbr, ckey, note=lambda _m: None):
     """one model, start to finish: returns its asset id or raises OpenCloudError"""
+    if locked():
+        raise OpenCloudError(LOCKED)
     glb = write_glb(mesh, textures, pbr, name)
     who = {"userId" if creator["type"] == "User" else "groupId": str(creator["id"])}
     body, ctype = _multipart({"assetType": "Model", "displayName": name[:50],
@@ -234,6 +247,8 @@ def _upload(key, creator, name, mesh, textures, pbr, ckey, note=lambda _m: None)
 
 def upload_one(key, creator, name, mesh, textures, pbr, ckey):
     """for a set: (asset id, whether it was already uploaded). Raises OpenCloudError."""
+    if locked():                                               # not even a model uploaded earlier is handed out
+        raise OpenCloudError(LOCKED)
     cached = _cache().get(ckey)
     if cached:
         return int(cached), True
@@ -255,6 +270,9 @@ def start(revision, manifest, mesh, textures, key, creator_type, creator_id):
     creator = {"type": creator_type, "id": int(creator_id)} if str(creator_id).strip().isdigit() else None
     with lock:
         state.update(revision=revision, model_asset_id=None, creator=creator)
+    if locked():                                               # before the key is even looked at; no thread starts
+        _set(revision, state="off", message=LOCKED)
+        return
     if not key:
         _set(revision, state="off", message="Add your Open Cloud key in FitBridge preferences to make this uploadable")
         return

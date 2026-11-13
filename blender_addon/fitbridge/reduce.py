@@ -89,6 +89,37 @@ def _carry_auto(ob, was):
 
 # ------------------------------------------------------------------------------------------------- the operator
 
+def lodforge(context, ob, goal):
+    """LODForge's own Decimate on ob with FitBridge's preset, aiming for `goal` triangles; your LODForge settings and
+    your selection come back afterwards. True when ob's mesh was replaced by the reduced one."""
+    old_me = ob.data
+    s = context.scene.lodforge
+    saved = {k: getattr(s, k) for k in list(PRESET) + ["count"]}
+    sel = [o for o in context.view_layer.objects.selected]
+    active = context.view_layer.objects.active
+    try:
+        for k, v in PRESET.items():
+            setattr(s, k, v)
+        s.count = goal
+        for o in sel:
+            o.select_set(False)
+        ob.select_set(True)
+        context.view_layer.objects.active = ob
+        got = bpy.ops.lodforge.decimate()
+    finally:
+        for k, v in saved.items():
+            setattr(s, k, v)
+        for o in context.view_layer.objects.selected:
+            o.select_set(False)
+        for o in sel:
+            try:
+                o.select_set(True)
+            except (RuntimeError, ReferenceError):
+                pass
+        context.view_layer.objects.active = active
+    return "FINISHED" in got and ob.data is not old_me
+
+
 def _count(context, ob):
     me = ob.evaluated_get(context.evaluated_depsgraph_get()).data
     me.calc_loop_triangles()
@@ -132,31 +163,7 @@ class FB_OT_reduce_tris(bpy.types.Operator):
         notes = {o.name: _auto_keys(o) for o in [ob] + members}
         old_me = ob.data
         old_name = old_me.name
-        s = context.scene.lodforge
-        saved = {k: getattr(s, k) for k in list(PRESET) + ["count"]}
-        sel = [o for o in context.view_layer.objects.selected]
-        active = context.view_layer.objects.active
-        try:
-            for k, v in PRESET.items():
-                setattr(s, k, v)
-            s.count = goal
-            for o in sel:
-                o.select_set(False)
-            ob.select_set(True)
-            context.view_layer.objects.active = ob
-            got = bpy.ops.lodforge.decimate()
-        finally:
-            for k, v in saved.items():
-                setattr(s, k, v)
-            for o in context.view_layer.objects.selected:
-                o.select_set(False)
-            for o in sel:
-                try:
-                    o.select_set(True)
-                except (RuntimeError, ReferenceError):
-                    pass
-            context.view_layer.objects.active = active
-        if "FINISHED" not in got or ob.data is old_me:
+        if not lodforge(context, ob, goal):
             self.report({"ERROR"}, "LODForge couldn't reduce it (its message is in the Info log)")
             return {"CANCELLED"}
 
