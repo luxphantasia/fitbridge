@@ -54,3 +54,18 @@ listing = { id, status: "running" | "done" | "failed", step, error, url, chip_id
 - The site refuses any request over 1 MB ("That request is too big."), so FitBridge keeps the four pictures under
   900 KB together: JPEG at quality 90, and for a texture too busy to fit, taken again at a lower quality and size
   (`SHOT_TRIES` in `listing.py`). PNGs of a textured item were 2.3 MB and never arrived.
+
+## Your fits, told to Paradyse
+
+With the same Blender key set, Send to Studio and Send all colours also tell Paradyse where the item sits, so the
+Studio's hand-fit lessons can learn from your own fits (Paradyse's contract: "Autopilot: fitting by hand", part 4).
+Code: `blender_addon/fitbridge/fits.py`, tests in `tests/test_fits.py` (against a local fake, never the real site).
+
+- `POST /fits`, multipart: a field `fit` with `{ name, kind, placement, rule, thumb, size, triangles, asset_id,
+  fitbridge, mesh }` and the file `mesh` (the item's GLB in its own frame, 12 MB at most).
+- `placement` is identity and the box centre in the body attachment's frame (FitBridge bakes the turn and the size
+  into the mesh). `rule` is `null`: where the autopilot's rule would put it is not worked out in your Blender.
+  `asset_id` is `null` (the upload is still running when it is sent). `size` is wide, deep, tall in studs.
+- Sent after the send or the upload has started, on its own thread: it never delays or stops them, and a failure is
+  one quiet line in Blender's console. No key, no request. A Blender with the upload lock on (the UGC autopilot's)
+  never sends it. Nothing personal goes with it; the key travels in the header only.

@@ -40,6 +40,11 @@ if [ $code -eq 0 ]; then                       # the marks on the mannequins (a 
     "$BLENDER" -b --python-exit-code 1 --python "$HERE/test_marks.py"
   code=$?
 fi
+if [ $code -eq 0 ]; then                       # your fits told to Paradyse Studio (POST /fits) against a fake of it
+  HOME="$T" BLENDER_USER_RESOURCES="$T/blender" FITBRIDGE_CACHE="$T/cache9" FITBRIDGE_PORT="${FITBRIDGE_PORT:-47298}" \
+    "$BLENDER" -b --python-exit-code 1 --python "$HERE/test_fits.py"
+  code=$?
+fi
 if [ $code -eq 0 ]; then                       # the Reduce button, with a built Modeling Suite (private) if you have one
   if [ -n "$MODELING_SUITE_BUILD" ] && [ -d "$MODELING_SUITE_BUILD" ]; then
     mkdir -p "$T/blender/extensions/user_default"

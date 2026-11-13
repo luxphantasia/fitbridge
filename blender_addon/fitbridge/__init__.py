@@ -10,7 +10,7 @@ import bpy
 from bpy.props import (BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty,
                        PointerProperty, StringProperty)
 
-from . import auto, batch, draw, evaluate, host, listing, panel, reduce, rig, server, spec, thumb, upload, variants
+from . import auto, batch, draw, evaluate, fits, host, listing, panel, reduce, rig, server, spec, thumb, upload, variants
 from . import ui as kit
 
 ICONS = {"pass": "CHECKMARK", "warn": "ERROR", "fail": "CANCEL"}
@@ -406,6 +406,8 @@ class FB_OT_send(bpy.types.Operator):
         p = prefs()
         upload.start(rev, manifest, mesh, pixels, p.api_key if p else "", p.creator_type if p else "User",
                      p.creator_id if p else "")
+        # with a Paradyse key set: tell its Studio where this sits (after the upload has started, on its own thread)
+        fits.tell(manifest["name"], res, thumb.owner(context)[0], mesh, pixels, bool(res["pbr"]))
         st.revision = rev
         _status["last_sent"] = time.time()
         _status["message"] = f"Sent {manifest['name']} (revision {rev})"
