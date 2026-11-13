@@ -120,8 +120,15 @@ def _prompt_refine():
 finished thumbnail and give the number of the best in `shot`. {THUMBNAIL_BAR}"""
 
 
+FIGURE_PLAIN = "a plain grey blocky figure with no face."
+FIGURE_MARKED = ("a grey blocky figure with a simple face drawn on the front of its head (two eyes and a mouth) and a "
+                 "dark stripe down the back of its head and torso. Tell the character's front from its back by the face "
+                 "and the stripe before anything else; the turn of each shot says the same.")
+
+
 def _prompt_fit():
-    return """These shots show a rigid accessory worn on a Roblox R6 character, a plain grey blocky figure with no face. \
+    figure = FIGURE_MARKED if rig.marked() else FIGURE_PLAIN
+    return f"""These shots show a rigid accessory worn on a Roblox R6 character, {figure} \
 Each shot gives its camera angle: the character looks toward the camera at turn 0, its right is toward positive turn, and \
 turn 180 is behind it.
 
