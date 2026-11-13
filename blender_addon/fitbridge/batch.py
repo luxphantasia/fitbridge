@@ -256,6 +256,9 @@ def start(context):
     threading.Thread(target=_work, name="FitBridge set", daemon=True, args=(
         rev, items, mesh, plain, base_name(context, original), original.name, api_key, creator, claude_key, shots,
         spec.limits())).start()
+    # with a Paradyse key set: tell its Studio where the original sits (on its own thread, after the set has started)
+    from . import fits
+    fits.tell(base_name(context, original), res, g, mesh, items[0]["raw"], items[0]["pbr"])
     return None
 
 
