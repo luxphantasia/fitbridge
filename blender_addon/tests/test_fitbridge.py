@@ -177,6 +177,13 @@ hat.select_set(True)
 st.acc_type = "Hat"
 st.body_scale = "Classic"
 bpy.ops.fitbridge.spawn_r15()
+
+
+def rig_parts(coll):
+    """a mannequin's own parts (the marks drawn on its head and torso are objects of their own beside them)"""
+    return [o for o in coll.objects if not o.get("fitbridge_mark")]
+
+
 if abs(spec.lowest_point(spec.rig("Classic"))) > 1e-9:
     fail("the stand-in R15 should stand on the ground")
 zs = [v.co.z for o in bpy.data.collections["FitBridge R15"].objects for v in o.data.vertices]
@@ -1355,7 +1362,7 @@ if "rig:Classic" in get("/v1/hello")[1]["needs"]:
     fail("rig need should clear")
 fitbridge.process_inbox()
 coll = bpy.data.collections["FitBridge R15"]
-if coll["fitbridge_source"] != "studio" or len(coll.objects) != 1 or len(coll.objects[0].data.polygons) != 4:
+if coll["fitbridge_source"] != "studio" or len(rig_parts(coll)) != 1 or len(rig_parts(coll)[0].data.polygons) != 4:
     fail("the box rig should be swapped for Studio's rig")
 res = evaluate.evaluate(ctx)
 if not np.allclose(res["fit"]["offset"], [-0.3, 0.1, -0.2], atol=1e-6):
@@ -1417,7 +1424,7 @@ bpy.ops.fitbridge.show_rig(kind="R15")
 if rigmod.shown() != "R15":
     bpy.ops.fitbridge.show_rig(kind="R15")
 coll = bpy.data.collections["FitBridge R15"]
-if coll["fitbridge_source"] != "outdated" or len(coll.objects) != 1:
+if coll["fitbridge_source"] != "outdated" or len(rig_parts(coll)) != 1:
     fail(f"a v1 rig should still show, marked outdated: {coll.get('fitbridge_source')}")
 if "rig:Classic" not in get("/v1/hello")[1]["needs"]:
     fail("an outdated rig should be asked for again")
@@ -1426,7 +1433,7 @@ post("/v1/rig", {"protocol": 1, "rig_version": spec.RIG_VERSION, "body_scale": "
                  "attachments": v1["attachments"]})
 fitbridge.process_inbox()
 coll = bpy.data.collections["FitBridge R15"]
-if coll["fitbridge_source"] != "studio" or len(coll.objects) != 2 or spec.rig_outdated("Classic"):
+if coll["fitbridge_source"] != "studio" or len(rig_parts(coll)) != 2 or spec.rig_outdated("Classic"):
     fail("the v2 rig should replace the outdated one")
 # R6: boxes until Studio sends the real R6, then swapped in place
 bpy.ops.fitbridge.show_rig(kind="R6")
@@ -1441,8 +1448,8 @@ if "rig:R6" in get("/v1/hello")[1]["needs"]:
     fail("rig:R6 should clear when it arrives")
 fitbridge.process_inbox()
 c6 = bpy.data.collections["FitBridge R6 preview"]
-if rigmod.spawned_r6_source() != "studio" or len(c6.objects) != 3:
-    fail(f"the real R6 should replace the boxes: {rigmod.spawned_r6_source()} {len(c6.objects)}")
+if rigmod.spawned_r6_source() != "studio" or len(rig_parts(c6)) != 3:
+    fail(f"the real R6 should replace the boxes: {rigmod.spawned_r6_source()} {len(rig_parts(c6))}")
 if not (spec.cache_dir() / "rig_R6.json").exists():
     fail("R6 rig should be cached")
 bpy.ops.fitbridge.show_rig(kind="R15")

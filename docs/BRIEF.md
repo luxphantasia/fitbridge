@@ -11,6 +11,12 @@ Fitting and framing a rigid UGC accessory in Studio takes rounds of import, fit,
 - **Audience:** the user first, but clean enough to release publicly later.
 - **Blender 4.2+**, shipped as a Blender extension.
 - **Rigs:** an R15 mannequin with a body-scale picker (Classic, Normal, Slender). R6 is a preview dummy only.
+  Both mannequins carry marks that show which way they look: a simple face on the front of the head (two eyes and a
+  mouth) and a dark stripe down the back of the head and torso. FitBridge draws them itself, as dark faces lying on
+  the surface (objects named "Marks Head" and so on, beside the parts), so they show in every viewport mode; none of
+  Roblox's own face picture is used. They are display only: the checks, the thumbnails and what is sent to Roblox
+  never see them. A mannequin in an older file gets them when the file is opened. Auto mode's fit look is told the
+  figure is marked.
 - **Scope:** rigid accessories only. No layered clothing in v1.
 - **Transfer:** a live local bridge. Blender serves on localhost and the Studio plugin pulls from it.
 - **Specs:** one shared spec file in a public GitHub repo, plus a weekly checker that proposes edits for the user's approval. Live rules from Studio override the file whenever Studio is connected.
