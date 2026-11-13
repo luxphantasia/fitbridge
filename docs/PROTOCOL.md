@@ -188,6 +188,8 @@ Studio plugins can't upload assets yet (`CreateAssetAsync` reports "not availabl
 - `off` means no API key is set. Studio then only builds previews and says "Add your Open Cloud key in Blender preferences to make this uploadable."
 - `failed` carries Roblox's error sentence in `message`.
 
+**The upload lock.** A Blender started with the environment variable `FITBRIDGE_NO_UPLOAD=1` never calls Open Cloud. Send still builds the package and reports `upload.state: "off"` with the reason; Send all colours refuses; every function in `upload.py` that would reach Roblox raises instead, even for a model that is already in the upload cache. The UGC autopilot's Blender runs this way: it builds a set with `batch.build_set` (the `/v1/set` description with no `upload` blocks, the shared mesh, and a colour map and `.glb` per colour) and hands it to Paradyse, which publishes only after a check and an approval.
+
 **Studio, when `upload.state` becomes `done` for the current revision:**
 1. Load the model (`game:GetObjects("rbxassetid://" .. model_asset_id)`, falling back to `InsertService:LoadAsset`) and take its MeshPart. That gives `MeshId` plus `TextureID` or a `SurfaceAppearance`, all owned by the creator.
 2. **Orientation check:** Roblox's importer may turn a mesh 180° around Y. Studio reads the uploaded mesh (`AssetService:CreateEditableMeshAsync`), samples the manifest vertices and picks whichever of `R = identity` or `R = 180° about Y` matches. If R isn't identity, Studio folds it in:

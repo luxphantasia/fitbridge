@@ -30,6 +30,11 @@ if [ $code -eq 0 ]; then                       # Colour versions against a fake 
     "$BLENDER" -b --python-exit-code 1 --python "$HERE/test_colours.py"
   code=$?
 fi
+if [ $code -eq 0 ]; then                       # the upload lock and the build-only set against a fake Open Cloud
+  HOME="$T" BLENDER_USER_RESOURCES="$T/blender" FITBRIDGE_CACHE="$T/cache7" FITBRIDGE_PORT="${FITBRIDGE_PORT:-47298}" \
+    "$BLENDER" -b --python-exit-code 1 --python "$HERE/test_no_upload.py"
+  code=$?
+fi
 if [ $code -eq 0 ]; then                       # the Reduce button, with a built Modeling Suite (private) if you have one
   if [ -n "$MODELING_SUITE_BUILD" ] && [ -d "$MODELING_SUITE_BUILD" ]; then
     mkdir -p "$T/blender/extensions/user_default"
